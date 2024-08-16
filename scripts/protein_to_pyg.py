@@ -5,6 +5,7 @@ import os
 from glob import glob
 import torch
 from simpatico.pdb_utils import pdb2pyg
+from simpatico.mol_utils import molfile2pyg
 
 
 def main():
@@ -57,7 +58,15 @@ PyG graphs from the protein PDBs.
                 Path(graph_file_out).touch()
 
         # new_graph = pdb2pyg(structure_f) if args.protein else sdf2pyg(structure_f)
-        new_graph = pdb2pyg(structure_f)
+        new_graph = (
+            pdb2pyg(structure_f)
+            if args.protein
+            else molfile2pyg(structure_f, get_pos=True)
+        )
+
+        if new_graph is None:
+            continue
+
         torch.save(new_graph, graph_file_out)
         print(f"{structure_i} of {total}: {graph_file_out}")
 

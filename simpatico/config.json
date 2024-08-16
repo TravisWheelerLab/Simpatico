@@ -62,5 +62,37 @@
         "SD",
         "SG",
         "PN"
-    ]
+    ],
+    "mol_atom_vocab": [
+        "As",
+        "B",
+        "Be",
+        "Br",
+        "C",
+        "Cl",
+        "Co",
+        "Cu",
+        "F",
+        "Fe",
+        "H",
+        "I",
+        "Ir",
+        "Mg",
+        "N",
+        "O",
+        "Os",
+        "P",
+        "Pt",
+        "Re",
+        "Rh",
+        "Ru",
+        "S",
+        "Sb",
+        "Se",
+        "Si",
+        "Te",
+        "V",
+        "Zn"
+    ],
+    "H_count_vocab": [0,1,2,3]
 }

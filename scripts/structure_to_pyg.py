@@ -10,10 +10,7 @@ from simpatico.mol_utils import molfile2pyg
 
 def main():
     parser = argparse.ArgumentParser(
-        description="""\
-Iterate through data directory and generate
-PyG graphs from either protein PDBs or molecular SDFs.
-"""
+        description="Generate PyG graphs from protein PDBs, or molecular SDF/PDB/Mol files."
     )
     parser.add_argument(
         "-f",
@@ -43,25 +40,33 @@ PyG graphs from either protein PDBs or molecular SDFs.
 
     args = parser.parse_args()
     output_file_template = args.outpath + "/%s.pyg"
+
+    # get list of all structure files that correspond to FILE_STRUCTURE parameter
     structure_files = glob(args.file_structure)
     total = len(structure_files)
 
+    # for every structure file, convert to pyg and save in provided OUTPATH
     for structure_i, structure_f in enumerate(structure_files):
+        # get name of file, ignoring parent directories and file extension
         filename = structure_f.split("/")[-1].split(".")[0]
+
+        # insert filename into output file template to produce output path for final PyG file
         graph_file_out = output_file_template % filename
 
         if args.no_overwrite:
             if os.path.exists(graph_file_out):
                 continue
             else:
-                # Create an empty file so parallel jobs skip this one.
+                # create an empty file so parallel jobs know to skip current target
                 Path(graph_file_out).touch()
 
+        # use appropriate conversion method for protein or molecular input
         if args.protein:
             new_graph = pdb2pyg(structure_f)
         else:
             new_graph = molfile2pyg(structure_f, get_pos=True)
 
+        # if conversion is unsuccessful, will return None
         if new_graph is None:
             continue
 

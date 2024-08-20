@@ -11,8 +11,8 @@ from simpatico.mol_utils import molfile2pyg
 def main():
     parser = argparse.ArgumentParser(
         description="""\
-Iterate through PDBBind complex directories and generate
-PyG graphs from the protein PDBs.
+Iterate through data directory and generate
+PyG graphs from either protein PDBs or molecular SDFs.
 """
     )
     parser.add_argument(
@@ -57,12 +57,10 @@ PyG graphs from the protein PDBs.
                 # Create an empty file so parallel jobs skip this one.
                 Path(graph_file_out).touch()
 
-        # new_graph = pdb2pyg(structure_f) if args.protein else sdf2pyg(structure_f)
-        new_graph = (
-            pdb2pyg(structure_f)
-            if args.protein
-            else molfile2pyg(structure_f, get_pos=True)
-        )
+        if args.protein:
+            new_graph = pdb2pyg(structure_f)
+        else:
+            new_graph = molfile2pyg(structure_f, get_pos=True)
 
         if new_graph is None:
             continue

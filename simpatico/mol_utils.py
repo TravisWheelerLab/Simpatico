@@ -12,17 +12,18 @@ from simpatico.utils import to_onehot, get_k_hop_edges
 
 
 def get_mol_atom_features(m):
-    atom_count = m.getNumAtoms()
+    atom_count = m.GetNumAtoms()
     x = [[] for _ in range(atom_count)]
 
     for atom in m.GetAtoms():
         a_i = atom.GetIdx()
         x[a_i] = to_onehot(atom.GetSymbol(), config.get("mol_atom_vocab"))
 
-    return x
+    return torch.tensor(x)
 
 
 def get_mol_pos(m):
+    atom_count = m.GetNumAtoms()
     conformer = m.GetConformer()
     pos = [[] for _ in range(atom_count)]
 
@@ -35,34 +36,34 @@ def get_mol_pos(m):
 
 
 def get_mol_edges(m, k=3):
-    k_hop_vocab = [x + 1 for x in range(k)]
     edge_index = [[], []]
 
     for b in m.GetBonds():
         edge_index[0].append(b.GetBeginAtomIdx())
         edge_index[1].append(b.GetEndAtomIdx())
 
-    edge_index, edge_attr = get_k_hop_edges(edge_index)
+    edge_index_tensor = torch.tensor(edge_index)
+    final_edge_index, final_edge_attr = get_k_hop_edges(edge_index_tensor)
 
-    return edge_index, edge_attr
+    return final_edge_index, final_edge_attr
 
 
 def get_H_counts(x, edge_index, edge_attr=None, k_graph=True):
-    H_count_features = [[0 for _ in config.get("H_count_vocab")] for _ in x]
+    H_count_features = torch.tensor(
+        [[0 for _ in config.get("H_count_vocab")] for _ in x]
+    )
     ei = edge_index.clone()
     if k_graph:
-        ei = ei[:, edge_attr[:, 0] == 1]
+        ei = ei[:, torch.where(edge_attr[:, 0] == 1)[0]]
     ei = to_undirected(ei)
     H_idx = config.get("mol_atom_vocab").index("H")
     H_atom_index = torch.where(x[:, H_idx] == 1)[0]
     H_node_sinks = torch.where(
-        (H_atom_index.unsqueeze(1) == ei[1].unsqueeze(0)).any(dim=1)
+        (H_atom_index.unsqueeze(0) == ei[1].unsqueeze(1)).any(dim=1)
     )[0]
     H_neighbors, H_counts = ei[:, H_node_sinks][0].unique(return_counts=True)
-    for atom_idx, atom_H_count in zip(H_neighbors, H_counts):
-        H_count_features[atom_idx.item()][atom_H_count.item()] = 1
-
-    return torch.tensor(H_count_features)
+    H_count_features[H_neighbors.int(), H_counts.int()] = 1
+    return H_count_features
 
 
 def mol2pyg(m, removeHs=True):
@@ -74,7 +75,8 @@ def mol2pyg(m, removeHs=True):
     x = get_mol_atom_features(m)
     pos = get_mol_pos(m)
     edge_index, edge_attr = get_mol_edges(m)
-    x = torch.hstack((x, get_H_counts(x, edge_index, edge_attr)))
+    H_count_features = get_H_counts(x, edge_index, edge_attr)
+    x = torch.hstack((x, H_count_features))
 
     if removeHs:
         H_idx = config.get("mol_atom_vocab").index("H")

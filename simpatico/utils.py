@@ -47,4 +47,4 @@ def get_k_hop_edges(edge_index, k=3):
                     ),
                 )
             )
-    return final_edge_index, torch.tensor(edge_attr)
+    return final_edge_index.int(), torch.tensor(edge_attr)

@@ -21,6 +21,7 @@ def get_pdb_line_data(line: str) -> Tuple[List[float], List[float]]:
     # Specify the (start,stop) indices of features to extract from PDB line
     atom_name = (12, 16)
     res_name = (17, 20)
+
     x_pos = (30, 38)
     y_pos = (38, 46)
     z_pos = (46, 54)
@@ -58,8 +59,10 @@ def pdb2pyg(pdb_path: str) -> Data:
         for line in pdb_in:
             # Only interested in ATOM lines
             if line[0:4] == "ATOM":
-                # Skip hydrogens
+                # Skip hydrogens.
                 if re.match(r"^(\d+H|H)", line[12:16].strip()):
+                    continue
+                if line[76:78].strip() == "H":
                     continue
                 else:
                     x, pos = get_pdb_line_data(line)

@@ -126,7 +126,9 @@ def get_H_counts(
     H_neighbors, H_counts = heavy_to_hydrogen_edges[0].unique(return_counts=True)
 
     # update one hot to reflect number of hydrogens connected to each heavy atom
-    H_count_features[H_neighbors.int(), H_counts.int()] = 1
+    H_count_features[H_neighbors.long(), H_counts.long()] = 1
+    # For atoms not connect to a hydrogen, set first index of onehot to 1 to indicate zero Hs
+    H_count_features[H_count_features.sum(1) == 0, 0] = 1
     return H_count_features
 
 
@@ -171,7 +173,7 @@ def mol2pyg(m: Mol, removeHs: bool = True) -> Optional[Data]:
     if removeHs:
         H_idx = mol_atom_vocab.index("H")
         # Get indices of non-hydrogen (heavy) atoms
-        heavy_atom_index = torch.where(x[:, H_idx] != 1)[0]
+        heavy_atom_index = torch.where(x[:, H_idx] != 1)[0].long()
 
         # Remove hydrogen-adjacent edges
         edge_index, edge_attr = subgraph(

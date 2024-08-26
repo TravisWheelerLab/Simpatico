@@ -5,6 +5,7 @@ from torch_geometric.nn import (
     Sequential as PyG_Sequential,
 )
 from torch.nn import Sequential
+from typing import Optional
 
 
 class MolEncoder(torch.nn.Module):
@@ -38,13 +39,17 @@ class MolEncoder(torch.nn.Module):
         heads=4,
         blocks=3,
         block_depth=2,
+        edge_dim: Optional[int] = None,
         **kwargs
     ):
         super().__init__()
         self.input_projection_layer = torch.nn.Linear(feature_dim, hidden_dim * heads)
 
         self.residual_blocks = torch.nn.ModuleList(
-            [ResBlock(hidden_dim, heads, block_depth) for _ in range(blocks)]
+            [
+                ResBlock(hidden_dim, heads, block_depth, edge_dim=edge_dim)
+                for _ in range(blocks)
+            ]
         )
 
         self.output_projection_layer = Sequential(
@@ -59,7 +64,6 @@ class MolEncoder(torch.nn.Module):
             data.edge_index.long(),
             data.edge_attr.float(),
         )
-
         # Outputs will be concatenated and input to final layer.
         rblock_outs = [self.input_projection_layer(x.float())]
 

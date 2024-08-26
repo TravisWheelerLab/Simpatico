@@ -1,17 +1,13 @@
 import torch
 from typing import Optional
 from torch.nn import SiLU, Sequential, Linear
-from torch_geometric.nn import GATv2Conv, Sequential as PyG_Sequential
+from torch_geometric.nn import GATv2Conv, knn, Sequential as PyG_Sequential
+from torch_geometric.utils import to_undirected
 
 
-def get_edge_weights(self, ei, pos_a, pos_b, f):
-    relu = ReLU()
-    edge_weights = torch.norm(pos_a[ei[0]] - pos_b[ei[1]], dim=1).unsqueeze(dim=1)
-    return relu(f(edge_weights)).squeeze()
-
-
-class EdgeWeightFromDistance(torch.nn.Module):
+class PositionalEdgeGenerator(torch.nn.Module):
     def __init__(self, node_dim: int, hidden_dim: int):
+        super().__init__()
         self.relu = torch.nn.ReLU()
         self.MLP = Sequential(
             Linear(node_dim * 2 + 1, hidden_dim),
@@ -23,15 +19,29 @@ class EdgeWeightFromDistance(torch.nn.Module):
     def forward(
         self,
         x: torch.Tensor,
-        y: torch.Tensor,
-        edge_index: torch.Tensor,
-        pos_x: torch.Tensor,
-        pos_y: torch.Tensor,
-    ) -> torch.Tensor:
-        node_distances = torch.norm(pos_x[edge_index[0]] - pos_y[edge_index[1]], dim=1)
-        mlp_in = torch.hstack((x[edge_index[0]], y[edge_index[1]], node_distances))
-        mlp_out = self.MLP(mlp_in)
-        return mlp_out
+        pos: torch.Tensor,
+        x_subset: torch.Tensor,
+        y_subset: torch.Tensor,
+        k: int,
+        batch: torch.Tensor,
+    ):
+        device = x.device
+        connections = knn(
+            pos[x_subset], pos[y_subset], k, batch[x_subset], batch[y_subset]
+        )
+        edge_index = torch.vstack(
+            (y_subset[connections[0]], x_subset[connections[1]])
+        ).to(device)
+        node_distances = (
+            torch.norm(pos[edge_index[0]] - pos[edge_index[1]], dim=1)
+            .unsqueeze(1)
+            .to(device)
+        )
+        mlp_features = torch.hstack(
+            (x[edge_index[0]], x[edge_index[1]], node_distances)
+        )
+        edge_weights = self.MLP(mlp_features)
+        return to_undirected(edge_index, edge_weights)
 
 
 class ResLayer(torch.nn.Module):
@@ -84,8 +94,10 @@ class ResLayer(torch.nn.Module):
             torch.Tensor: The output node feature matrix with shape [num_nodes, dims].
         """
         h = self.layer(x, edge_index, edge_attr)
+
         if self.norm is not None:
             h = self.norm(h)
+
         h = self.act(h)
         return self.dropout(x + h)
 
@@ -106,13 +118,15 @@ class ResBlock(torch.nn.Module):
         torch.Tensor: The output node feature matrix with shape [num_nodes, dims].
     """
 
-    def __init__(self, dims: int, heads: int, depth: int):
+    def __init__(
+        self, dims: int, heads: int, depth: int, edge_dim: Optional[int] = None
+    ):
         super().__init__()
         self.res_block = PyG_Sequential(
             "x, edge_index, edge_attr",
             [
                 (
-                    ResLayer(dims, heads=heads),
+                    ResLayer(dims, heads=heads, edge_dim=edge_dim),
                     "x, edge_index, edge_attr -> x",
                 )
                 for _ in range(depth)

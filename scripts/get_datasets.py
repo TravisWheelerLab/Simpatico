@@ -7,11 +7,9 @@ import os
 from glob import glob
 import torch
 from torch_geometric.data import Dataset
-import timeit
 
 
 def main():
-    start = timeit.timeit()
 
     parser = argparse.ArgumentParser(
         description="Generate train/validation PyG graph datasets from existing PyG graph files."
@@ -54,7 +52,7 @@ def main():
     molecular_graphs = []
     p_i = 0
 
-    for pf in protein_files:
+    for pf in protein_files[:800]:
         p_i += 1
         pdb_id = pf.split("/")[-1].split("_")[0]
         for mf in mol_files:
@@ -66,10 +64,7 @@ def main():
                 molecular_graphs.append(torch.load(mf).to_data_list()[0])
                 break
 
-    end = timeit.timeit()
-    print(f"Loaded a stupid amount a stuff in {end-start}")
     for i in range(args.n):
-        print(f"Saving set {i+1} of {args.n}")
         v_set_length = int(len(protein_graphs) * args.ratio)
         v_start_idx = i * v_set_length
         v_stop_idx = v_start_idx + v_set_length
@@ -78,6 +73,7 @@ def main():
         if args.n > 1:
             file_out = file_out.split(".")[0] + f"_{i+1}." + file_out.split(".")[1]
 
+        print(f"Saving set {i+1} of {args.n}: {file_out}")
         torch.save(
             (
                 (

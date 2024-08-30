@@ -1,5 +1,5 @@
 import torch
-from ..model_utils import ResBlock, PositionalEdgeGenerator
+from simpatico.utils.model_utils import ResBlock, PositionalEdgeGenerator
 from torch_geometric.nn import GATv2Conv, Sequential
 from torch_geometric.nn.models import MLP
 from torch_geometric.nn.aggr import AttentionalAggregation, MaxAggregation
@@ -142,4 +142,4 @@ class ProteinEncoder(torch.nn.Module):
             rblock_outs.append(rblock(rblock_outs[-1], full_edge_index, full_edge_attr))
 
         encoding = self.output_projection(torch.hstack(rblock_outs)[vox_node_index])
-        return encoding
+        return (encoding, vox_pos, vox_batch)

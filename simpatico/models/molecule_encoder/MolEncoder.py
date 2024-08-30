@@ -1,5 +1,5 @@
 import torch
-from ..model_utils import ResLayer, ResBlock
+from simpatico.utils.model_utils import ResLayer, ResBlock
 from torch_geometric.nn import (
     GATv2Conv,
     Sequential as PyG_Sequential,

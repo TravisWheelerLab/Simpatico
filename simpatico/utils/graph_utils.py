@@ -9,32 +9,56 @@ def get_proximal_atom_masks(
 ) -> List[torch.Tensor]:
     """Get per-node boolean masks of protein and ligand graphs in complex, indicating which atoms are interacting."""
     protein_mask = torch.zeros(protein_pos.size(0)).bool()
-    ligand_mask = torch.zeros(protein_pos.size(0)).bool()
+    ligand_mask = torch.zeros(ligand_pos.size(0)).bool()
 
     interaction_index = radius(protein_pos, ligand_pos, r)
 
-    protein_mask[interaction_index[0].unique()] = True
-    ligand_mask[interaction_index[1].unique()] = True
+    protein_mask[interaction_index[1].unique()] = True
+    ligand_mask[interaction_index[0].unique()] = True
 
     return protein_mask, ligand_mask
 
 
 def get_pocket_mask(
-    protein_graph: Data, center: torch.Tensor, pocket_dim: int = 15
+    protein_graph: Data, center: torch.Tensor, pocket_dim: int = 20
 ) -> torch.Tensor:
-    zero_centered_range = torch.arange(-int(pocket_dim / 2), int(pocket_dim / 2))
-    voxel_box = torch.cartesian_prod(*[zero_centered_range] * 3)
+    zero_centered_range = torch.arange(-int(pocket_dim / 2), int(pocket_dim / 2) + 1)
+    voxel_box = torch.cartesian_prod(*[zero_centered_range] * 3).float()
     pocket_coords = center + voxel_box
 
     voxel_filter = torch.zeros(pocket_coords.size(0)).bool()
     # Only include voxels within 4 angstroms of protein atom
-    voxel_filter[radius(protein_graph.pos, voxel_box, 4)[0].unique()] = True
+    voxel_filter[
+        radius(protein_graph.pos, pocket_coords, 4, max_num_neighbors=999)[0].unique()
+    ] = True
     # Exclude voxels that are closer than 2 angstroms to a protein atom
-    voxel_filter[radius(protein_graph.pos, voxel_box, 2)[0].unique()] = False
-    pocket_surface_atoms = radius(protein_graph.pos, pocket_coords[voxel_filter], 4)[
-        1
-    ].unique()
+    voxel_filter[
+        radius(protein_graph.pos, pocket_coords, 2, max_num_neighbors=999)[0].unique()
+    ] = False
+    pocket_surface_atoms = radius(
+        protein_graph.pos, pocket_coords[voxel_filter], 4, max_num_neighbors=999
+    )[1].unique()
     pocket_mask = torch.zeros(protein_graph.pos.size(0)).bool()
     pocket_mask[pocket_surface_atoms] = True
 
     return pocket_mask
+
+
+def get_self_negatives(mb):
+    negative_index = []
+
+    for i in torch.unique(mb.batch):
+        self_index = torch.where(mb.batch == i)[0]
+        distant_indices = torch.cdist(mb.pos[self_index], mb.pos[self_index]).argsort(
+            dim=1, descending=True
+        )
+        distant_indices = distant_indices[:, : int(distant_indices.size(1) * 0.75)]
+        r_indices = torch.randint(
+            0, distant_indices.size(1), (distant_indices.size(0),)
+        )
+        shuffled_indices = distant_indices[
+            (torch.arange(distant_indices.size(0)), r_indices)
+        ]
+        negative_index.append(self_index[shuffled_indices])
+
+    return torch.hstack(negative_index)

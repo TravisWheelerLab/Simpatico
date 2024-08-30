@@ -5,7 +5,13 @@ import torch
 from typing import List, Tuple, Optional
 from torch_geometric.data import Data, Batch
 from torch_geometric.nn import radius
-from simpatico.utils.data_utils import ProteinLigandDataLoader
+from simpatico.utils.data_utils import (
+    ProteinLigandDataLoader,
+    TrainingOutputHandler,
+)
+from simpatico.models.molecule_encoder.MolEncoder import MolEncoder
+from simpatico.models.protein_encoder.ProteinEncoder import ProteinEncoder
+from simpatico.models import MolEncoderDefaults, ProteinEncoderDefaults
 from typing import Callable
 
 
@@ -35,17 +41,45 @@ def check_pdb_ids(a: str, b: str) -> bool:
 
 
 def main(args):
+    device = args.device
     # Load data
     train_data, validation_data = torch.load(args.data_path)
 
     train_loader = ProteinLigandDataLoader(*train_data, check_pdb_ids)
     validation_loader = ProteinLigandDataLoader(*validation_data, check_pdb_ids)
-    print(validation_loader.proteins[0])
 
-    # Model, criterion, optimizer
-    # model = model1.Model().to(args.device)
-    # criterion = torch.nn.CrossEntropyLoss()
-    # optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
+    protein_encoder = ProteinEncoder(**ProteinEncoderDefaults).to(device)
+    mol_encoder = MolEncoder(**MolEncoderDefaults).to(device)
+
+    optimizer = torch.optim.AdamW(
+        list(protein_encoder.parameters()) + list(mol_encoder.parameters()),
+        lr=args.learning_rate,
+    )
+
+    for epoch in range(1, args.epochs + 1):
+        for batch_idx in range(train_loader.size // args.batch_size):
+            protein_batch, molecule_batch = train_loader.get_random_batch(
+                batch_size=args.batch_size
+            )
+            protein_batch = protein_batch.to(device)
+            molecule_batch = molecule_batch.to(device)
+
+            protein_out = protein_encoder(protein_batch)
+            mol_atom_embeds = mol_encoder(molecule_batch)
+
+            output_handler = TrainingOutputHandler(
+                *protein_out, mol_atom_embeds, molecule_batch.pos, molecule_batch.batch
+            )
+
+            (
+                positive_protein_index,
+                positive_mol_index,
+                random_negatives,
+                self_negatives,
+                hard_negatives,
+            ) = output_handler.get_all_training_pairs()
+
+            sys.exit()
 
     # # Train the model
     # for epoch in range(1, args.epochs + 1):

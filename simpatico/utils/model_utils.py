@@ -6,11 +6,11 @@ from torch_geometric.utils import to_undirected
 
 
 class PositionalEdgeGenerator(torch.nn.Module):
-    def __init__(self, node_dim: int, hidden_dim: int):
+    def __init__(self, hidden_dim: int):
         super().__init__()
         self.relu = torch.nn.ReLU()
         self.MLP = Sequential(
-            Linear(node_dim * 2 + 1, hidden_dim),
+            Linear(1, hidden_dim),
             self.relu,
             Linear(hidden_dim, 1),
             self.relu,
@@ -18,14 +18,13 @@ class PositionalEdgeGenerator(torch.nn.Module):
 
     def forward(
         self,
-        x: torch.Tensor,
         pos: torch.Tensor,
         x_subset: torch.Tensor,
         y_subset: torch.Tensor,
         k: int,
         batch: torch.Tensor,
     ):
-        device = x.device
+        device = pos.device
         connections = knn(
             pos[x_subset], pos[y_subset], k, batch[x_subset], batch[y_subset]
         )
@@ -37,10 +36,7 @@ class PositionalEdgeGenerator(torch.nn.Module):
             .unsqueeze(1)
             .to(device)
         )
-        mlp_features = torch.hstack(
-            (x[edge_index[0]], x[edge_index[1]], node_distances)
-        )
-        edge_weights = self.MLP(mlp_features)
+        edge_weights = self.MLP(node_distances)
         return to_undirected(edge_index, edge_weights)
 
 

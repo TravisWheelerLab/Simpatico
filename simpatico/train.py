@@ -40,6 +40,17 @@ def check_pdb_ids(a: str, b: str) -> bool:
     return get_id(a) == get_id(b)
 
 
+def positive_margin_loss(anchors, positives, negatives, m=2.0, d=3):
+    positive_distances = torch.norm(anchors - positives, dim=1)
+    anchors = anchors.repeat(negatives.size(0) // anchors.size(0), 1)
+
+    negative_distances = torch.norm(anchors - negatives, dim=1)
+    positive_loss = torch.clamp(positive_distances - m, min=0)
+    negative_loss = torch.clamp(m * d - negative_distances, min=0)
+
+    return positive_loss.mean() + negative_loss.mean()
+
+
 def main(args):
     device = args.device
     # Load data
@@ -65,10 +76,10 @@ def main(args):
             molecule_batch = molecule_batch.to(device)
 
             protein_out = protein_encoder(protein_batch)
-            mol_atom_embeds = mol_encoder(molecule_batch)
+            mol_out = mol_encoder(molecule_batch)
 
             output_handler = TrainingOutputHandler(
-                *protein_out, mol_atom_embeds, molecule_batch.pos, molecule_batch.batch
+                *protein_out, mol_out, molecule_batch.pos, molecule_batch.batch
             )
 
             (
@@ -77,9 +88,20 @@ def main(args):
                 random_negatives,
                 self_negatives,
                 hard_negatives,
-            ) = output_handler.get_all_training_pairs()
+            ) = output_handler.get_all_train_pairs()
 
-            sys.exit()
+            negative_mol_index = torch.hstack(
+                # (random_negatives, self_negatives, hard_negatives)
+                (random_negatives, self_negatives)
+            )
+            loss = positive_margin_loss(
+                protein_out[0][positive_protein_index],
+                mol_out[positive_mol_index],
+                mol_out[negative_mol_index],
+            )
+            print(loss)
+            loss.backward()
+            optimizer.step()
 
     # # Train the model
     # for epoch in range(1, args.epochs + 1):

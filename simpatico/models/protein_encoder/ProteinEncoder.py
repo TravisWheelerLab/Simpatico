@@ -53,9 +53,9 @@ class ProteinEncoder(torch.nn.Module):
         adjusted_hidden_dim = hidden_dim * heads
 
         # Nonlinear functions to pass edges through.
-        self.atom_edge_MLP = PositionalEdgeGenerator(adjusted_hidden_dim, 32)
-        self.atom_vox_edge_MLP = PositionalEdgeGenerator(adjusted_hidden_dim, 32)
-        self.vox_edge_MLP = PositionalEdgeGenerator(adjusted_hidden_dim, 32)
+        self.atom_edge_MLP = PositionalEdgeGenerator(8)
+        self.atom_vox_edge_MLP = PositionalEdgeGenerator(8)
+        self.vox_edge_MLP = PositionalEdgeGenerator(8)
 
         # Nearest-neighbor count for atom-atom network
         self.atom_k = atom_k
@@ -125,8 +125,7 @@ class ProteinEncoder(torch.nn.Module):
         ]
 
         aa_edges, av_edges, vv_edges = [
-            f(full_x, full_pos, *edge_params, full_batch)
-            for f, edge_params in edge_combos
+            f(full_pos, *edge_params, full_batch) for f, edge_params in edge_combos
         ]
 
         full_edge_index = torch.hstack((aa_edges[0], av_edges[0], vv_edges[0])).to(

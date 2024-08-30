@@ -36,25 +36,6 @@ class ProteinLigandDataLoader:
     def get_random_negatives(self, mol_batch):
         return torch.randperm(mol_batch.x.size(0))
 
-    def get_self_negatives(self, mol_batch):
-        negative_index = []
-
-        for mol_i in torch.unique(mol_batch.batch):
-            self_index = torch.where(mol_batch.batch == mol_i)[0]
-            distant_indices = torch.cdist(
-                mol_batch.pos[self_index], mol_batch.pos[self_index]
-            ).argsort(dim=1, descending=True)
-            distant_indices = distant_indices[:, : int(distant_indices.size(1) * 0.75)]
-            r_indices = torch.randint(
-                0, distant_indices.size(1), (distant_indices.size(0),)
-            )
-            shuffled_indices = distant_indices[
-                (torch.arange(distant_indices.size(0)), r_indices)
-            ]
-            negative_index.append(self_index[shuffled_indices])
-
-        return torch.hstack(negative_index)
-
     def get_random_pocket(self, protein_graph: Data) -> torch.Tensor:
         """Selects random coordinate based on graph's 'proximal' mask as pocket center"""
         pocket_atoms = torch.where(protein_graph.proximal)[0]
@@ -100,13 +81,10 @@ class ProteinLigandDataLoader:
 
         mol_batch = Batch.from_data_list(mol_list)
 
-        mol_batch.random_negatives = self.get_random_negatives(mol_batch)
-        mol_batch.self_negatives = self.get_self_negatives(mol_batch)
-
         if mols_only is True:
             return mol_batch
 
-        return protein_batch, mol_batch, positive_pair_index
+        return protein_batch, mol_batch
 
     def get_random_batch(
         self,
@@ -131,15 +109,15 @@ class TrainingOutputHandler:
         self.mol_pos = mol_pos
         self.mol_batch = mol_batch
 
-        self.prot_positives, self.mol_positives = radius(
-            mol_pos,
-            protein_pos,
-            4,
+        self.mol_positives, self.prot_positives = radius(
+            protein_pos, mol_pos, 4, protein_batch, mol_batch
         )
+
+        self.self_mask = self.get_self_mask()
 
     def get_self_mask(self):
         positive_batch = self.protein_batch[self.prot_positives]
-        batch_index = self.mol_batch.unsqueeze(0).repeat(positive_batch, 1)
+        batch_index = self.mol_batch.unsqueeze(0).repeat(positive_batch.size(0), 1)
         self_mask = torch.zeros_like(batch_index).bool()
         self_mask[batch_index == positive_batch.unsqueeze(1)] = True
         return self_mask
@@ -148,9 +126,7 @@ class TrainingOutputHandler:
         positive_embeds = self.protein_embeds[self.prot_positives]
         embed_distances = torch.cdist(positive_embeds, self.mol_embeds)
 
-        self_mask = self.get_self_mask()
-
-        embed_distances[self_mask] = 999
+        embed_distances[self.self_mask] = 999
         hard_negative_index = embed_distances.argsort(1)[:, :k][
             (
                 torch.arange(embed_distances.size(0)),
@@ -159,5 +135,41 @@ class TrainingOutputHandler:
         ]
         return hard_negative_index
 
+    def get_self_negatives(self):
+        negative_index = []
+
+        for mol_i in self.mol_positives:
+            self_index = torch.where(self.mol_batch == self.mol_batch[mol_i])[0]
+            # Sample only from the 3/4 farthest atoms
+            distant_indices = torch.cdist(
+                self.mol_pos[mol_i].unsqueeze(0), self.mol_pos[self_index]
+            )[0].argsort(descending=True)[: int(self_index.size(0) * 0.75)]
+
+            negative_index.append(
+                distant_indices[torch.randint(0, distant_indices.size(0), (1,))]
+            )
+
+        return torch.hstack(negative_index)
+
     def get_random_negatives(self):
-        self_mask = self.get_self_mask()
+        random_index = []
+
+        for row in self.self_mask:
+            non_self_indices = torch.where(~row)[0]
+            random_idx = torch.randint(0, len(non_self_indices), (1,))
+            random_index.append(non_self_indices[random_idx])
+
+        return torch.hstack(random_index)
+
+    def get_all_train_pairs(self):
+        random_negatives = self.get_random_negatives()
+        self_negatives = self.get_self_negatives()
+        hard_negatives = self.get_hard_negatives()
+
+        return (
+            self.prot_positives,
+            self.mol_positives,
+            random_negatives,
+            self_negatives,
+            hard_negatives,
+        )

@@ -2,8 +2,5 @@
     "feature_dim": 33, 
     "hidden_dim":  64, 
     "out_dim":     64,
-    "heads":       4,
-    "blocks":      3,
-    "block_depth": 2,
     "edge_dim":    3
 }

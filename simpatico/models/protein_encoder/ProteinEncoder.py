@@ -41,12 +41,11 @@ class ProteinEncoder(torch.nn.Module):
         hidden_dim,
         out_dim,
         heads=4,
-        blocks=6,
+        blocks=4,
         block_depth=2,
         atom_k=10,
-        atom_vox_k=10,
+        atom_vox_k=15,
         vox_k=15,
-        trim_k=30,
     ):
         super().__init__()
         # GAT layers concatenate heads, so true hidden dim is (hidden_dim*heads) dimensional.
@@ -63,8 +62,6 @@ class ProteinEncoder(torch.nn.Module):
         self.atom_vox_k = atom_vox_k
         # Nearest-neighbor count for voxel-voxel network
         self.vox_k = vox_k
-        # Protein atoms not among the 'trim_k' closest atoms to a voxel node will be dismissed.
-        self.trim_k = trim_k
 
         self.atom_input_projection = torch.nn.Linear(feature_dim, adjusted_hidden_dim)
         self.vox_input_projection = torch.nn.Linear(feature_dim, adjusted_hidden_dim)
@@ -93,7 +90,7 @@ class ProteinEncoder(torch.nn.Module):
 
         # Trim atoms that are excessively far from the voxel nodes.
         trimmed_atom_index = knn(
-            pos, pos[pocket_mask], self.trim_k, batch, batch[pocket_mask]
+            pos, pos[pocket_mask], self.atom_vox_k, batch, batch[pocket_mask]
         )[1].unique()
 
         atom_x = self.atom_input_projection(x[trimmed_atom_index])
@@ -111,15 +108,11 @@ class ProteinEncoder(torch.nn.Module):
         atom_node_index = torch.arange(atom_x.size(0))
         vox_node_index = torch.arange(vox_x.size(0)) + atom_node_index.size(0)
 
-        aa_edges = None
-        av_edges = None
-        vv_edges = None
-
         edge_combos = [
             (self.atom_edge_MLP, [atom_node_index, atom_node_index, self.atom_k]),
             (
                 self.atom_vox_edge_MLP,
-                [atom_node_index, vox_node_index, self.atom_vox_k],
+                [vox_node_index, atom_node_index, self.atom_vox_k],
             ),
             (self.vox_edge_MLP, [vox_node_index, vox_node_index, self.vox_k]),
         ]

@@ -37,7 +37,7 @@ class PositionalEdgeGenerator(torch.nn.Module):
             .to(device)
         )
         edge_weights = self.MLP(node_distances)
-        return to_undirected(edge_index, edge_weights)
+        return edge_index, edge_weights
 
 
 class ResLayer(torch.nn.Module):

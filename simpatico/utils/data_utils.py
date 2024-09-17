@@ -16,7 +16,7 @@ class ProteinLigandDataLoader:
         if parity_check is not None:
             for a, b in zip(protein_data_list, ligand_data_list):
                 if parity_check(a.name, b.name) == False:
-                    sys.exit("Noncompatible lists provided.")
+                    sys.exit("Non-compatible lists provided.")
 
         self.proteins = protein_data_list
         self.ligands = ligand_data_list
@@ -39,6 +39,10 @@ class ProteinLigandDataLoader:
     def get_random_pocket(self, protein_graph: Data) -> torch.Tensor:
         """Selects random coordinate based on graph's 'proximal' mask as pocket center"""
         pocket_atoms = torch.where(protein_graph.proximal)[0]
+
+        if pocket_atoms.size(0) == 0:
+            return None
+
         pocket_atoms_pos = protein_graph.pos[pocket_atoms]
         random_pocket_atom = torch.randperm(pocket_atoms.size(0))[0]
 
@@ -69,7 +73,12 @@ class ProteinLigandDataLoader:
             if mols_only is False:
                 protein_graph = self.proteins[g_idx.item()].clone()
                 if pocket_mask is True:
-                    protein_graph.pocket_mask = self.get_random_pocket(protein_graph)
+                    mask = self.get_random_pocket(protein_graph)
+
+                    if mask is None:
+                        continue
+
+                    protein_graph.pocket_mask = mask
                 protein_list.append(protein_graph)
 
             if proteins_only is False:
@@ -122,9 +131,10 @@ class TrainingOutputHandler:
         self_mask[batch_index == positive_batch.unsqueeze(1)] = True
         return self_mask
 
-    def get_hard_negatives(self, k=25):
+    def get_hard_negatives(self, difficulty=0.25):
         positive_embeds = self.protein_embeds[self.prot_positives]
         embed_distances = torch.cdist(positive_embeds, self.mol_embeds)
+        k = int(embed_distances.size(1) * difficulty)
 
         embed_distances[self.self_mask] = 999
         hard_negative_index = embed_distances.argsort(1)[:, :k][
@@ -161,10 +171,10 @@ class TrainingOutputHandler:
 
         return torch.hstack(random_index)
 
-    def get_all_train_pairs(self):
+    def get_all_train_pairs(self, difficulty=0.25):
         random_negatives = self.get_random_negatives()
         self_negatives = self.get_self_negatives()
-        hard_negatives = self.get_hard_negatives()
+        hard_negatives = self.get_hard_negatives(difficulty)
 
         return (
             self.prot_positives,

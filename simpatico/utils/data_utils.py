@@ -84,7 +84,9 @@ class ProteinLigandDataLoader:
             if proteins_only is False:
                 mol_list.append(self.ligands[g_idx.item()])
 
-        protein_batch = Batch.from_data_list(protein_list)
+        if mols_only is False:
+            protein_batch = Batch.from_data_list(protein_list)
+
         if proteins_only is True:
             return protein_batch
 

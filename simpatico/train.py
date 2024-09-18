@@ -43,25 +43,93 @@ def hard_negative_scheduler(target_epoch, target_difficulty):
     return scheduler
 
 
+def distance_score(m, p):
+    return torch.cdist(m, p).sort(1).values[:, :20].mean(dim=1)
+
+
+def validate(protein_encoder, mol_encoder, data_loader, device):
+    """Perform mock virtual screening task."""
+
+    print("Running validation...")
+    protein_encoder.eval()
+    mol_encoder.eval()
+
+    mol_batch = data_loader.get_batch(
+        torch.arange(data_loader.size),
+        mols_only=True,
+    )
+
+    with torch.no_grad():
+        mol_embeds = mol_encoder(mol_batch.to(device))
+        final_scores = []
+
+        for target_index in torch.arange(data_loader.size):
+            prot_batch = data_loader.get_batch(
+                target_index.unsqueeze(0), proteins_only=True
+            )
+            prot_embeds = protein_encoder(prot_batch.to(device))[0]
+
+            scores = distance_score(mol_embeds, prot_embeds)
+            score_means = (
+                torch.zeros(mol_batch.batch.unique().size(0))
+                .to(device)
+                .float()
+                .scatter_reduce(0, mol_batch.batch, scores, reduce="mean")
+            )
+
+            active_score = score_means[target_index]
+            decoy_scores = torch.hstack(
+                (score_means[:target_index], score_means[target_index + 1 :])
+            )
+            final_scores.append(
+                torch.where(decoy_scores > active_score)[0].size(0)
+                / decoy_scores.size(0)
+            )
+
+    protein_encoder.train()
+    mol_encoder.train()
+
+    final_scores = torch.tensor(final_scores)
+    return final_scores.mean().item(), final_scores.std().item()
+
+
+def logger(output_path):
+    def log_text(message):
+        if output_path is not None:
+            with open(output_path, "a") as f_out:
+                f_out.write(f"{message}\n")
+        else:
+            print(message)
+
+    return log_text
+
+
 def main(args):
     device = args.device
+    log_text = logger(args.output)
     # Load data
     train_data, validation_data = torch.load(args.data_path)
 
-    with open(args.output, "w"):
-        True
+    if args.output is not None:
+        with open(args.output, "w"):
+            True
 
     train_loader = ProteinLigandDataLoader(*train_data, check_pdb_ids)
     validation_loader = ProteinLigandDataLoader(*validation_data, check_pdb_ids)
 
     protein_encoder = ProteinEncoder(**ProteinEncoderDefaults).to(device)
     mol_encoder = MolEncoder(**MolEncoderDefaults).to(device)
+    best_validation_score = 0
 
     if args.load_model:
         protein_encoder.load_state_dict(
             torch.load(args.weight_location + "/p_test_w.pt")
         )
         mol_encoder.load_state_dict(torch.load(args.weight_location + "/m_test_w.pt"))
+        best_validation_score, _ = validate(
+            protein_encoder, mol_encoder, validation_loader, device
+        )
+        log_text(f"Best validation score: {best_validation_score}")
 
     optimizer = torch.optim.AdamW(
         list(protein_encoder.parameters()) + list(mol_encoder.parameters()),
@@ -72,8 +140,8 @@ def main(args):
 
     for epoch in range(1, args.epochs + 1):
         difficulty_value = get_hard_negative_difficulty(epoch)
-        with open(args.output, "a") as f_out:
-            f_out.write(f"Epoch {epoch} difficulty: {difficulty_value}\n")
+        log_message = f"Epoch {epoch} difficulty: {difficulty_value}"
+        log_text(log_message)
 
         loss_vals = []
         for batch_idx in range(train_loader.size // args.batch_size):
@@ -109,28 +177,28 @@ def main(args):
                 mol_out[negative_mol_index],
             )
             loss_vals.append(loss)
+
             if batch_idx % 10 == 0:
                 loss_avg = torch.hstack(loss_vals).mean().item()
-
-                with open(args.output, "a") as f_out:
-                    f_out.write(f"Epoch {epoch}, batch {batch_idx}: {loss_avg}\n")
-
+                log_text(f"Epoch {epoch}, batch {batch_idx}: {loss_avg}")
                 loss_vals = []
 
             loss.backward()
             optimizer.step()
 
-        torch.save(protein_encoder.state_dict(), args.weight_location + "/p_test_w.pt")
-        torch.save(mol_encoder.state_dict(), args.weight_location + "/m_test_w.pt")
+        epoch_validation_score, _ = validate(
+            protein_encoder, mol_encoder, validation_loader, device
+        )
 
-    # # Train the model
-    # for epoch in range(1, args.epochs + 1):
-    #     train(model, train_loader, optimizer, criterion, args.device)
-    #     # Save checkpoint
-    #     if args.save_model:
-    #         torch.save(
-    #             model.state_dict(), f"../experiments/checkpoints/model_epoch_{epoch}.pt"
-    #         )
+        log_text(f"Epoch {epoch} validation: {epoch_validation_score}")
+
+        if epoch_validation_score > best_validation_score:
+            best_validation_score = epoch_validation_score
+            torch.save(
+                protein_encoder.state_dict(), args.weight_location + "/p_test_w.pt"
+            )
+            torch.save(mol_encoder.state_dict(), args.weight_location + "/m_test_w.pt")
+            log_text(f"Weights updated")
 
 
 if __name__ == "__main__":

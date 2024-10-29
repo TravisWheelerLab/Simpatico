@@ -169,25 +169,17 @@ def main(args):
             )
 
             if prot_loss:
-                anchor_samples = output_handler.get_protein_anchor_pairs(
-                    difficulty=difficulty_value
-                )
-                anchor_negatives = torch.hstack(anchor_samples[-3:])
-                loss = positive_margin_loss(
-                    protein_out[0][anchor_samples[0]],
-                    mol_out[anchor_samples[1]],
-                    mol_out[anchor_negatives],
+                anchor_samples, positive_samples, negative_samples = (
+                    output_handler.get_protein_anchor_pairs(difficulty=difficulty_value)
                 )
             else:
-                anchor_samples = output_handler.get_mol_anchor_pairs(
-                    difficulty=difficulty_value
+                anchor_samples, positive_samples, negative_samples = (
+                    output_handler.get_mol_anchor_pairs(difficulty=difficulty_value)
                 )
-                anchor_negatives = torch.hstack(anchor_samples[-3:])
-                loss = positive_margin_loss(
-                    mol_out[anchor_samples[0]],
-                    protein_out[0][anchor_samples[1]],
-                    protein_out[0][anchor_negatives],
-                )
+
+            loss = positive_margin_loss(
+                anchor_samples, positive_samples, negative_samples
+            )
 
             loss_vals.append(loss)
 

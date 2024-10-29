@@ -233,12 +233,12 @@ class TrainingOutputHandler:
                 prot_anchor=True, difficulty=difficulty
             )
 
+        all_negatives = torch.hstack((random_negatives, self_negatives, hard_negatives))
+
         return (
-            self.prot_actives,
-            self.mol_actives,
-            random_negatives,
-            self_negatives,
-            hard_negatives,
+            self.protein_embeds[self.prot_actives],
+            self.mol_embeds[self.mol_actives],
+            self.mol_embeds[all_negatives],
         )
 
     def get_mol_anchor_pairs(self, difficulty=0.25):
@@ -249,10 +249,10 @@ class TrainingOutputHandler:
                 prot_anchor=False, difficulty=difficulty
             )
 
+        all_negatives = torch.hstack((random_negatives, self_negatives, hard_negatives))
+
         return (
-            self.mol_actives,
-            self.prot_actives,
-            random_negatives,
-            self_negatives,
-            hard_negatives,
+            self.mol_embeds[self.mol_actives],
+            self.protein_embeds[self.prot_actives],
+            self.protein_embeds[all_negatives],
         )

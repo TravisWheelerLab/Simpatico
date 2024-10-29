@@ -39,50 +39,93 @@ def main():
         type=int,
         help="Number of unique train/validation sets to generate",
     )
+    parser.add_argument(
+        "-v",
+        "--validation_ids",
+        type=str,
+        help="path to line-separated file of ids to withold from training and use as validation.",
+    )
     parser.add_argument("-r", "--ratio", default=0.1)
 
     args = parser.parse_args()
+
+    if args.validation_ids is not None:
+        validation_ids = []
+        with open(args.validation_ids, "r") as v_in:
+            for line in v_in:
+                validation_ids.append(line.rstrip())
 
     protein_files = glob(args.protein_file_structure)
     shuffle(protein_files)
 
     mol_files = glob(args.molecular_file_structure)
+    file_out = args.outpath
 
     protein_graphs = []
     molecular_graphs = []
     p_i = 0
 
-    for pf in protein_files[:800]:
+    for pf in protein_files:
         p_i += 1
         pdb_id = pf.split("/")[-1].split("_")[0]
         for mf in mol_files:
             if mf.split("/")[-1].split("_")[0] == pdb_id:
                 if p_i % 1000 == 0:
                     print(p_i)
+
                 protein_graphs.append(torch.load(pf))
                 # Molecular graph files contain batches by default
                 molecular_graphs.append(torch.load(mf).to_data_list()[0])
                 break
 
-    for i in range(args.n):
-        v_set_length = int(len(protein_graphs) * args.ratio)
-        v_start_idx = i * v_set_length
-        v_stop_idx = v_start_idx + v_set_length
+    if args.validation_ids is None:
+        for i in range(args.n):
+            v_set_length = int(len(protein_graphs) * args.ratio)
+            v_start_idx = i * v_set_length
+            v_stop_idx = v_start_idx + v_set_length
 
-        file_out = args.outpath
-        if args.n > 1:
-            file_out = file_out.split(".")[0] + f"_{i+1}." + file_out.split(".")[1]
+            if args.n > 1:
+                file_out = (
+                    args.out_path.split(".")[0]
+                    + f"_{i+1}."
+                    + args.out_path.split(".")[1]
+                )
 
-        print(f"Saving set {i+1} of {args.n}: {file_out}")
+            print(f"Saving set {i+1} of {args.n}: {file_out}")
+            torch.save(
+                (
+                    (
+                        protein_graphs[:v_start_idx] + protein_graphs[v_stop_idx:],
+                        molecular_graphs[:v_start_idx] + molecular_graphs[v_stop_idx:],
+                    ),
+                    (
+                        protein_graphs[v_start_idx:v_stop_idx],
+                        molecular_graphs[v_start_idx:v_stop_idx],
+                    ),
+                ),
+                file_out,
+            )
+    else:
+        train_proteins = []
+        train_mols = []
+
+        validation_proteins = []
+        validation_mols = []
+
+        for protein_graph, mol_graph in zip(protein_graphs, molecular_graphs):
+            if protein_graph.name.split("_")[0] in validation_ids:
+                validation_proteins.append(protein_graph)
+                validation_mols.append(mol_graph)
+            else:
+                train_proteins.append(protein_graph)
+                train_mols.append(mol_graph)
+
         torch.save(
             (
+                (train_proteins, train_mols),
                 (
-                    protein_graphs[:v_start_idx] + protein_graphs[v_stop_idx:],
-                    molecular_graphs[:v_start_idx] + molecular_graphs[v_stop_idx:],
-                ),
-                (
-                    protein_graphs[v_start_idx:v_stop_idx],
-                    molecular_graphs[v_start_idx:v_stop_idx],
+                    validation_proteins,
+                    validation_mols,
                 ),
             ),
             file_out,

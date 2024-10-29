@@ -41,7 +41,7 @@ class ProteinEncoder(torch.nn.Module):
         hidden_dim,
         out_dim,
         heads=4,
-        blocks=4,
+        blocks=6,
         block_depth=2,
         atom_k=10,
         atom_vox_k=15,

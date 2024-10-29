@@ -2,7 +2,6 @@ import torch
 from typing import Optional
 from torch.nn import SiLU, Sequential, Linear
 from torch_geometric.nn import GATv2Conv, knn, Sequential as PyG_Sequential
-from torch_geometric.utils import to_undirected
 
 
 class PositionalEdgeGenerator(torch.nn.Module):
@@ -63,7 +62,7 @@ class ResLayer(torch.nn.Module):
         self,
         dims: int,
         act: torch.nn.Module = SiLU,
-        dr: float = 0.25,
+        dr: float = 0.1,
         heads: int = 4,
         edge_dim: Optional[int] = None,
         norm: Optional[torch.nn.Module] = None,
@@ -73,7 +72,7 @@ class ResLayer(torch.nn.Module):
         # We concatenate output from heads, so expect (dims * heads) dimensional inputs.
         self.layer = GATv2Conv(dims * heads, dims, heads=heads, edge_dim=edge_dim)
         self.dropout = torch.nn.Dropout(dr)
-        self.norm = norm
+        self.norm = norm(dims * heads) if norm is not None else None
 
     def forward(
         self, x: torch.Tensor, edge_index: torch.Tensor, edge_attr: torch.Tensor

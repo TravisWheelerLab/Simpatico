@@ -48,7 +48,7 @@ def main():
     # for every structure file, convert to pyg and save in provided OUTPATH
     for structure_i, structure_f in enumerate(structure_files):
         # get name of file, ignoring parent directories and file extension
-        filename = structure_f.split("/")[-1].split(".")[0]
+        filename = "_".join(structure_f.split("/")[-2:]).split(".")[0]
 
         # insert filename into output file template to produce output path for final PyG file
         graph_file_out = output_file_template % filename

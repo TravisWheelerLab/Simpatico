@@ -42,23 +42,3 @@ def get_pocket_mask(
     pocket_mask[pocket_surface_atoms] = True
 
     return pocket_mask
-
-
-def get_self_negatives(mb):
-    negative_index = []
-
-    for i in torch.unique(mb.batch):
-        self_index = torch.where(mb.batch == i)[0]
-        distant_indices = torch.cdist(mb.pos[self_index], mb.pos[self_index]).argsort(
-            dim=1, descending=True
-        )
-        distant_indices = distant_indices[:, : int(distant_indices.size(1) * 0.75)]
-        r_indices = torch.randint(
-            0, distant_indices.size(1), (distant_indices.size(0),)
-        )
-        shuffled_indices = distant_indices[
-            (torch.arange(distant_indices.size(0)), r_indices)
-        ]
-        negative_index.append(self_index[shuffled_indices])
-
-    return torch.hstack(negative_index)

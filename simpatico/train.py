@@ -3,8 +3,6 @@ import sys
 import argparse
 import torch
 from typing import List, Tuple, Optional
-from torch_geometric.data import Data, Batch
-from torch_geometric.nn import radius
 from simpatico.utils.data_utils import (
     ProteinLigandDataLoader,
     TrainingOutputHandler,
@@ -43,14 +41,12 @@ def hard_negative_scheduler(target_epoch, target_difficulty):
     return scheduler
 
 
-def distance_score(m, p):
+def distance_score(m, p, k=25):
     return torch.cdist(m, p).sort(1).values[:, :20].mean(dim=1)
 
 
 def validate(protein_encoder, mol_encoder, data_loader, device):
     """Perform mock virtual screening task."""
-
-    print("Running validation...")
     protein_encoder.eval()
     mol_encoder.eval()
 
@@ -68,7 +64,6 @@ def validate(protein_encoder, mol_encoder, data_loader, device):
                 target_index.unsqueeze(0), proteins_only=True
             )
             prot_embeds = protein_encoder(prot_batch.to(device))[0]
-
             scores = distance_score(mol_embeds, prot_embeds)
             score_means = (
                 torch.zeros(mol_batch.batch.unique().size(0))
@@ -119,15 +114,20 @@ def main(args):
 
     protein_encoder = ProteinEncoder(**ProteinEncoderDefaults).to(device)
     mol_encoder = MolEncoder(**MolEncoderDefaults).to(device)
+
     best_validation_score = 0
 
     if args.load_model:
-        protein_encoder.load_state_dict(
-            torch.load(args.weight_location + "/p_test_w.pt")
-        )
-        mol_encoder.load_state_dict(torch.load(args.weight_location + "/m_test_w.pt"))
+        protein_model_weights, mol_model_weights = torch.load(args.weight_path)
+
+        protein_encoder.load_state_dict(protein_model_weights)
+        mol_encoder.load_state_dict(mol_model_weights)
+
         best_validation_score, _ = validate(
-            protein_encoder, mol_encoder, validation_loader, device
+            protein_encoder,
+            mol_encoder,
+            validation_loader,
+            device,
         )
         log_text(f"Best validation score: {best_validation_score}")
 
@@ -136,20 +136,28 @@ def main(args):
         lr=args.learning_rate,
     )
 
-    get_hard_negative_difficulty = hard_negative_scheduler(6, 0.1)
+    get_hard_negative_difficulty = hard_negative_scheduler(50, 0.05)
 
-    for epoch in range(1, args.epochs + 1):
+    for epoch in range(args.epoch_start, args.epochs + 1):
         difficulty_value = get_hard_negative_difficulty(epoch)
         log_message = f"Epoch {epoch} difficulty: {difficulty_value}"
         log_text(log_message)
 
         loss_vals = []
+        prot_loss = True
+
         for batch_idx in range(train_loader.size // args.batch_size):
             torch.cuda.empty_cache()
+            # prot_loss = not prot_loss
+
             optimizer.zero_grad()
             protein_batch, molecule_batch = train_loader.get_random_batch(
                 batch_size=args.batch_size
             )
+
+            protein_batch = protein_batch.clone()
+            protein_batch.pos += torch.randn_like(protein_batch.pos) * 0.25
+
             protein_batch = protein_batch.to(device)
             molecule_batch = molecule_batch.to(device)
 
@@ -160,22 +168,27 @@ def main(args):
                 *protein_out, mol_out, molecule_batch.pos, molecule_batch.batch
             )
 
-            (
-                positive_protein_index,
-                positive_mol_index,
-                random_negatives,
-                self_negatives,
-                hard_negatives,
-            ) = output_handler.get_all_train_pairs(difficulty=difficulty_value)
+            if prot_loss:
+                anchor_samples = output_handler.get_protein_anchor_pairs(
+                    difficulty=difficulty_value
+                )
+                anchor_negatives = torch.hstack(anchor_samples[-3:])
+                loss = positive_margin_loss(
+                    protein_out[0][anchor_samples[0]],
+                    mol_out[anchor_samples[1]],
+                    mol_out[anchor_negatives],
+                )
+            else:
+                anchor_samples = output_handler.get_mol_anchor_pairs(
+                    difficulty=difficulty_value
+                )
+                anchor_negatives = torch.hstack(anchor_samples[-3:])
+                loss = positive_margin_loss(
+                    mol_out[anchor_samples[0]],
+                    protein_out[0][anchor_samples[1]],
+                    protein_out[0][anchor_negatives],
+                )
 
-            negative_mol_index = torch.hstack(
-                (random_negatives, self_negatives, hard_negatives)
-            )
-            loss = positive_margin_loss(
-                protein_out[0][positive_protein_index],
-                mol_out[positive_mol_index],
-                mol_out[negative_mol_index],
-            )
             loss_vals.append(loss)
 
             if batch_idx % 10 == 0:
@@ -187,17 +200,22 @@ def main(args):
             optimizer.step()
 
         epoch_validation_score, _ = validate(
-            protein_encoder, mol_encoder, validation_loader, device
+            protein_encoder,
+            mol_encoder,
+            validation_loader,
+            device,
         )
 
         log_text(f"Epoch {epoch} validation: {epoch_validation_score}")
 
         if epoch_validation_score > best_validation_score:
             best_validation_score = epoch_validation_score
+
             torch.save(
-                protein_encoder.state_dict(), args.weight_location + "/p_test_w.pt"
+                [protein_encoder.state_dict(), mol_encoder.state_dict()],
+                args.weight_path,
             )
-            torch.save(mol_encoder.state_dict(), args.weight_location + "/m_test_w.pt")
+
             log_text(f"Weights updated")
 
 
@@ -229,13 +247,14 @@ if __name__ == "__main__":
     parser.add_argument(
         "--save_model", action="store_true", help="For Saving the current Model"
     )
-    parser.add_argument("-w", "--weight_location")
+    parser.add_argument("-w", "--weight_path")
     parser.add_argument(
         "-l",
         "--load_model",
         action="store_true",
         help="Load previously trained weights",
     )
+    parser.add_argument("--epoch_start", type=int, default=1)
 
     args = parser.parse_args()
     main(args)

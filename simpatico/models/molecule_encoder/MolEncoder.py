@@ -37,7 +37,7 @@ class MolEncoder(torch.nn.Module):
         hidden_dim,
         out_dim,
         heads=4,
-        blocks=3,
+        blocks=6,
         block_depth=2,
         edge_dim: Optional[int] = None,
         **kwargs

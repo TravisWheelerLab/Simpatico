@@ -120,25 +120,49 @@ class TrainingOutputHandler:
         self.mol_pos = mol_pos
         self.mol_batch = mol_batch
 
-        self.mol_positives, self.prot_positives = radius(
+        self.mol_actives, self.prot_actives = radius(
             protein_pos, mol_pos, 4, protein_batch, mol_batch
         )
 
-        self.self_mask = self.get_self_mask()
+    def get_mol_data(self, active_only=False):
+        if active_only:
+            mol_index = self.mol_actives
+        else:
+            mol_index = torch.arange(self.mol_embeds.size(0))
 
-    def get_self_mask(self):
-        positive_batch = self.protein_batch[self.prot_positives]
-        batch_index = self.mol_batch.unsqueeze(0).repeat(positive_batch.size(0), 1)
-        self_mask = torch.zeros_like(batch_index).bool()
-        self_mask[batch_index == positive_batch.unsqueeze(1)] = True
-        return self_mask
+        return (
+            self.mol_embeds[mol_index],
+            self.mol_pos[mol_index],
+            self.mol_batch[mol_index],
+        )
 
-    def get_hard_negatives(self, difficulty=0.25):
-        positive_embeds = self.protein_embeds[self.prot_positives]
-        embed_distances = torch.cdist(positive_embeds, self.mol_embeds)
+    def get_protein_data(self, active_only=False):
+        if active_only:
+            protein_index = self.prot_actives
+        else:
+            protein_index = torch.arange(self.protein_embeds.size(0))
+
+        return (
+            self.protein_embeds[protein_index],
+            self.protein_pos[protein_index],
+            self.protein_batch[protein_index],
+        )
+
+    def get_hard_negatives(self, prot_anchor=True, difficulty=0.25):
+        anchor_embeds, _, anchor_batch = (
+            self.get_protein_data(True) if prot_anchor else self.get_mol_data(True)
+        )
+        negative_embeds, _, negative_batch = (
+            self.get_mol_data() if prot_anchor else self.get_protein_data()
+        )
+
+        embed_distances = torch.cdist(anchor_embeds, negative_embeds)
         k = int(embed_distances.size(1) * difficulty)
 
-        embed_distances[self.self_mask] = 999
+        self_mask = anchor_batch.unsqueeze(1) == negative_batch.unsqueeze(0)
+        # Set the distance between any protein atom and true ligand embed to maximum observed distance
+        embed_distances[self_mask] = embed_distances.max()
+
         hard_negative_index = embed_distances.argsort(1)[:, :k][
             (
                 torch.arange(embed_distances.size(0)),
@@ -147,40 +171,87 @@ class TrainingOutputHandler:
         ]
         return hard_negative_index
 
-    def get_self_negatives(self):
+    def get_self_negatives(self, prot_anchor=True):
+
+        _, anchor_pos, anchor_batch = (
+            self.get_protein_data(True) if prot_anchor else self.get_mol_data(True)
+        )
+        _, negative_pos, negative_batch = (
+            self.get_mol_data() if prot_anchor else self.get_protein_data()
+        )
+
         negative_index = []
+        self_mask = anchor_batch.unsqueeze(1) == negative_batch.unsqueeze(0)
 
-        for mol_i in self.mol_positives:
-            self_index = torch.where(self.mol_batch == self.mol_batch[mol_i])[0]
-            # Sample only from the 3/4 farthest atoms
-            distant_indices = torch.cdist(
-                self.mol_pos[mol_i].unsqueeze(0), self.mol_pos[self_index]
-            )[0].argsort(descending=True)[: int(self_index.size(0) * 0.75)]
+        for a_pos, row in zip(anchor_pos, self_mask):
+            # indices of negative embeds from same complex
+            self_samples = torch.where(row)[0]
 
+            spatial_distances = torch.cdist(
+                a_pos.unsqueeze(0), negative_pos[self_samples]
+            )[0]
+            k = int(self_samples.size(0) * 0.75)
+
+            # sort indices of negative embeds by decreasing spatial distance from anchor embed.
+            # Cut the quarter nearest embeds.
+            farthest_self_negatives = self_samples[
+                spatial_distances.argsort(descending=True)
+            ][:k]
+
+            # Append one of these random 3/4 farthest self-negatives to 'negative_index'
             negative_index.append(
-                distant_indices[torch.randint(0, distant_indices.size(0), (1,))]
+                farthest_self_negatives[
+                    torch.randperm(farthest_self_negatives.size(0))[0]
+                ]
             )
-
         return torch.hstack(negative_index)
 
-    def get_random_negatives(self):
-        random_index = []
+    def get_random_negatives(self, prot_anchor=True):
 
-        for row in self.self_mask:
-            non_self_indices = torch.where(~row)[0]
+        _, _, positive_batch = (
+            self.get_protein_data(True) if prot_anchor else self.get_mol_data(True)
+        )
+        _, _, negative_batch = (
+            self.get_mol_data() if prot_anchor else self.get_protein_data()
+        )
+
+        random_index = []
+        self_mask = positive_batch.unsqueeze(1) != negative_batch.unsqueeze(0)
+
+        for row in self_mask:
+            non_self_indices = torch.where(row)[0]
             random_idx = torch.randint(0, len(non_self_indices), (1,))
             random_index.append(non_self_indices[random_idx])
 
         return torch.hstack(random_index)
 
-    def get_all_train_pairs(self, difficulty=0.25):
-        random_negatives = self.get_random_negatives()
-        self_negatives = self.get_self_negatives()
-        hard_negatives = self.get_hard_negatives(difficulty)
+    def get_protein_anchor_pairs(self, difficulty=0.25):
+        with torch.no_grad():
+            random_negatives = self.get_random_negatives(prot_anchor=True)
+            self_negatives = self.get_self_negatives(prot_anchor=True)
+            hard_negatives = self.get_hard_negatives(
+                prot_anchor=True, difficulty=difficulty
+            )
 
         return (
-            self.prot_positives,
-            self.mol_positives,
+            self.prot_actives,
+            self.mol_actives,
+            random_negatives,
+            self_negatives,
+            hard_negatives,
+        )
+
+    def get_mol_anchor_pairs(self, difficulty=0.25):
+        with torch.no_grad():
+            random_negatives = self.get_random_negatives(prot_anchor=False)
+            self_negatives = self.get_self_negatives(prot_anchor=False)
+            hard_negatives = self.get_hard_negatives(
+                prot_anchor=False, difficulty=difficulty
+            )
+
+        return (
+            self.mol_actives,
+            self.prot_actives,
             random_negatives,
             self_negatives,
             hard_negatives,

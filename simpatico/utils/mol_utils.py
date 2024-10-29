@@ -11,7 +11,7 @@ from torch import Tensor
 from typing import List, Tuple, Optional
 
 from simpatico import config
-from simpatico.utils import to_onehot, get_k_hop_edges
+from simpatico.utils.utils import to_onehot, get_k_hop_edges
 
 
 def get_mol_atom_features(m: Mol, atom_vocab: List[str]) -> torch.Tensor:
@@ -132,7 +132,7 @@ def get_H_counts(
     return H_count_features
 
 
-def mol2pyg(m: Mol, removeHs: bool = True) -> Optional[Data]:
+def mol2pyg(m: Mol, ignore_pos: bool = False, removeHs: bool = True) -> Optional[Data]:
     """
     Converts an RDKit Mol object into a PyG Data object representing the molecular graph.
     Args:
@@ -152,8 +152,9 @@ def mol2pyg(m: Mol, removeHs: bool = True) -> Optional[Data]:
     # Generate one-hot encoded atom features
     atom_species_onehots = get_mol_atom_features(m, mol_atom_vocab)
 
-    # Get the 3D coordinates of atoms in the molecule
-    pos = get_mol_pos(m)
+    if ignore_pos is False:
+        # Get the 3D coordinates of atoms in the molecule
+        pos = get_mol_pos(m)
 
     # Generate edge indices and edge attributes for the molecular graph
     edge_index, edge_attr = get_mol_edges(m)
@@ -180,10 +181,16 @@ def mol2pyg(m: Mol, removeHs: bool = True) -> Optional[Data]:
             heavy_atom_index, edge_index, edge_attr, relabel_nodes=True
         )
         x = x[heavy_atom_index]
-        pos = pos[heavy_atom_index]
+
+        if ignore_pos is False:
+            pos = pos[heavy_atom_index]
 
     # Create a PyG Data object representing the molecular graph
-    mol_graph = Data(x=x, pos=pos, edge_index=edge_index, edge_attr=edge_attr)
+    mol_graph = Data(x=x, edge_index=edge_index, edge_attr=edge_attr)
+
+    if ignore_pos is False:
+        mol_graph.pos = pos
+
     return mol_graph
 
 
@@ -199,20 +206,25 @@ def molfile2pyg(m_file: str, get_pos: bool = True, k: int = 3) -> Optional[Batch
     """
     # Extract the filename and filetype from the input file path
     filename, filetype = m_file.split("/")[-1].split(".")
+    ignore_pos = False
 
     # Use appropriate RDKit method for generating Molecule object from file
     if filetype == "sdf":
         mols = Chem.SDMolSupplier(m_file, sanitize=False)
 
-    if filetype == "pdb":
+    elif filetype == "pdb":
         mols = [Chem.MolFromPDBFile(m_file, sanitize=False)]
+
+    elif filetype == "ism":
+        mols = Chem.SmilesMolSupplier(m_file, sanitize=False)
+        ignore_pos = True
 
     # List to store individual PyG graph objects
     mol_batch = []
 
     for m_i, m in enumerate(mols):
         # Convert each molecule to a PyG graph
-        mg = mol2pyg(m)
+        mg = mol2pyg(m, ignore_pos)
 
         if mg is None:
             # Skip molecules that failed to convert

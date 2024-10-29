@@ -3,7 +3,7 @@ import sys
 import torch
 from torch_geometric.data import Data
 from simpatico import config
-from simpatico.utils import to_onehot
+from simpatico.utils.utils import to_onehot
 from typing import List, Tuple, Optional
 
 

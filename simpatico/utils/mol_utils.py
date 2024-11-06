@@ -159,6 +159,9 @@ def mol2pyg(m: Mol, ignore_pos: bool = False, removeHs: bool = True) -> Optional
     # Generate edge indices and edge attributes for the molecular graph
     edge_index, edge_attr = get_mol_edges(m)
 
+    if edge_index.size(1) == 0:
+        return None
+
     # Identify covalent bonds (edges where k = 1)
     covalent_index = torch.where(edge_attr[:, 0] == 1)[0]
     covalent_edge_index = edge_index[:, covalent_index]

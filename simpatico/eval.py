@@ -44,7 +44,7 @@ def get_args():
         help="Device to use for training",
     )
     parser.add_argument(
-        "c",
+        "-c",
         "--center",
         type=str,
         help="Protein pocket center coordinates in the form X,Y,Z e.g '-c 20.3,-12,10.25",
@@ -60,14 +60,14 @@ def main(args):
 
     if args.protein:
         encoder = ProteinEncoder(**ProteinEncoderDefaults).to(device)
-        weight_key = "protein_encoder"
+        weight_index = 0
 
     elif args.molecule:
         encoder = MolEncoder(**MolEncoderDefaults).to(device)
-        weight_key = "mol_encoder"
+        weight_index = 1
 
     encoder.load_state_dict(
-        torch.load(args.weight_location, map_location=device)[weight_key]
+        torch.load(args.weight_location, map_location=device)[weight_index]
     )
 
     encoder.eval()

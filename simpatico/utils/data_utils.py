@@ -124,7 +124,14 @@ def shuffle_sidechains(mol_batch, k_affected=2):
 
         new_link_atoms.append(shuffled_candidates[: (link_batch == bi).sum()])
 
+    if len(new_link_atoms) == 0:
+        return None
+
     new_link_atoms = torch.hstack(new_link_atoms)
+
+    if new_link_atoms.size(0) == 0:
+        return None
+
     updated_ei[1, link_mask] = new_link_atoms
 
     # oxidate new linking scaffold atoms

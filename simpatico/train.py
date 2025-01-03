@@ -193,9 +193,8 @@ def main(args):
 
             if shuffled_mol_batch is not None:
                 a_shuf, p_shuf, n_shuf = output_handler.get_shuffled_anchor_pairs()
-                shuffled_loss_ratio = (
-                    a_shuf.size(0).float()
-                    / (a_shuf.size(0) + anchor_samples.size(0)).float()
+                shuffled_loss_ratio = a_shuf.size(0) / float(
+                    a_shuf.size(0) + anchor_samples.size(0)
                 )
 
                 l2 = positive_margin_loss(a_shuf, p_shuf, n_shuf)

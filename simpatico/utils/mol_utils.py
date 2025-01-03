@@ -1,4 +1,5 @@
 import re
+from copy import deepcopy
 import torch
 import numpy as np
 from torch_geometric.data import Data
@@ -7,8 +8,11 @@ from rdkit.Chem import AllChem, AddHs
 from torch_geometric.utils import subgraph, to_undirected
 from torch_geometric.data import Batch
 from rdkit.Chem.rdchem import Mol
+from rdkit.Chem import AllChem
+from rdkit.Chem.Scaffolds import MurckoScaffold
 from torch import Tensor
 from typing import List, Tuple, Optional
+from molvs import Standardizer
 
 from simpatico import config
 from simpatico.utils.utils import to_onehot, get_k_hop_edges
@@ -132,7 +136,9 @@ def get_H_counts(
     return H_count_features
 
 
-def mol2pyg(m: Mol, ignore_pos: bool = False, removeHs: bool = True) -> Optional[Data]:
+def mol2pyg(
+    m: Mol, ignore_pos: bool = False, removeHs: bool = True, get_scaffold=True
+) -> Optional[Data]:
     """
     Converts an RDKit Mol object into a PyG Data object representing the molecular graph.
     Args:
@@ -141,16 +147,42 @@ def mol2pyg(m: Mol, ignore_pos: bool = False, removeHs: bool = True) -> Optional
     Returns:
         Optional[Data]: PyG Data object containing the graph representation of the molecule, or None if conversion fails.
     """
+    standardizer = Standardizer()
+
+    # If we cannot standardize molecule, we won't be able to extract the scaffold
     try:
-        # Attempt to add hydrogen atoms so that we are working with a standardized molecule going forward
+        m = standardizer.standardize(m)
+    except Exception as e:
+        get_scaffold = False
+
+    # Attempt to add hydrogen atoms so that we are working with a standardized molecule going forward
+    try:
         m = AddHs(m)
     except:
+        print("Could not add hydrogens")
         return None
+
+    if get_scaffold:
+        try:
+            scaffold = MurckoScaffold.GetScaffoldForMol(m)
+            scaffold_atoms = m.GetSubstructMatch(scaffold)
+
+            if len(scaffold_atoms) == 0:
+                get_scaffold = False
+            else:
+                scaffold_atoms = torch.tensor(list(scaffold_atoms))
+        except Exception as e:
+            print(e)
+            get_scaffold = False
 
     mol_atom_vocab = config.get("mol_atom_vocab")
 
     # Generate one-hot encoded atom features
     atom_species_onehots = get_mol_atom_features(m, mol_atom_vocab)
+
+    if get_scaffold:
+        scaffold_mask = torch.zeros(atom_species_onehots.size(0)).bool()
+        scaffold_mask[scaffold_atoms] = True
 
     if ignore_pos is False:
         # Get the 3D coordinates of atoms in the molecule
@@ -179,17 +211,28 @@ def mol2pyg(m: Mol, ignore_pos: bool = False, removeHs: bool = True) -> Optional
         # Get indices of non-hydrogen (heavy) atoms
         heavy_atom_index = torch.where(x[:, H_idx] != 1)[0].long()
 
-        # Remove hydrogen-adjacent edges
-        edge_index, edge_attr = subgraph(
-            heavy_atom_index, edge_index, edge_attr, relabel_nodes=True
-        )
-        x = x[heavy_atom_index]
+        try:
+            # Remove hydrogen-adjacent edges
+            edge_index, edge_attr = subgraph(
+                heavy_atom_index, edge_index, edge_attr, relabel_nodes=True
+            )
+            x = x[heavy_atom_index]
+        except:
+            return None
+
+        if get_scaffold:
+            scaffold_mask = scaffold_mask[heavy_atom_index]
 
         if ignore_pos is False:
             pos = pos[heavy_atom_index]
 
+    edge_index, edge_attr = to_undirected(edge_index, edge_attr, reduce="mean")
+
     # Create a PyG Data object representing the molecular graph
     mol_graph = Data(x=x, edge_index=edge_index, edge_attr=edge_attr)
+
+    if get_scaffold:
+        mol_graph.scaffold = scaffold_mask
 
     if ignore_pos is False:
         mol_graph.pos = pos
@@ -218,9 +261,12 @@ def molfile2pyg(m_file: str, get_pos: bool = True, k: int = 3) -> Optional[Batch
     elif filetype == "pdb":
         mols = [Chem.MolFromPDBFile(m_file, sanitize=False)]
 
-    elif filetype == "ism":
+    elif filetype in ["ism", "smi"]:
         mols = Chem.SmilesMolSupplier(m_file, sanitize=False)
         ignore_pos = True
+
+    elif filetype == "mol2":
+        mols = [Chem.MolFromMol2File(m_file, sanitize=False)]
 
     # List to store individual PyG graph objects
     mol_batch = []

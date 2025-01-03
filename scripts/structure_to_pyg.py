@@ -27,6 +27,15 @@ def main():
     parser.add_argument(
         "--no-overwrite", action="store_true", help="Do not overwrite existing files"
     )
+    parser.add_argument(
+        "--dirname-level",
+        type=int,
+        default=1,
+        help="""number of directory levels to use in naming file (1 is only filename, 2 is d).
+        e.g. [--dirname-level 1] produces pyg files like 'pdb_filename.pyg'.
+             [--dirname-level 2] produces pyg files like 'pdb_dir_pdb_filename.pyg'.
+        """,
+    )
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument(
         "-p", "--protein", action="store_true", help="Generate protein PyG graph files."
@@ -47,11 +56,13 @@ def main():
 
     # for every structure file, convert to pyg and save in provided OUTPATH
     for structure_i, structure_f in enumerate(structure_files):
+        filename = "_".join(structure_f.split("/")[-args.dirname_level :]).split(".")[0]
+        graph_file_out = output_file_template % filename
+
+        print(f"{structure_i} of {total}: {graph_file_out}")
         # get name of file, ignoring parent directories and file extension
-        filename = "_".join(structure_f.split("/")[-2:]).split(".")[0]
 
         # insert filename into output file template to produce output path for final PyG file
-        graph_file_out = output_file_template % filename
 
         if args.no_overwrite:
             if os.path.exists(graph_file_out):
@@ -71,7 +82,6 @@ def main():
             continue
 
         torch.save(new_graph, graph_file_out)
-        print(f"{structure_i} of {total}: {graph_file_out}")
 
 
 if __name__ == "__main__":

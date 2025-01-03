@@ -88,4 +88,6 @@ def get_k_hop_edges(edge_index: torch.Tensor, k: int = 3) -> torch.Tensor:
                     ),
                 )
             )
-    return final_edge_index.long(), torch.tensor(edge_attr)
+    return to_undirected(
+        final_edge_index.long(), torch.tensor(edge_attr), reduce="mean"
+    )

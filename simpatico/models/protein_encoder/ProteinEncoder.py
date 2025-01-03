@@ -105,8 +105,10 @@ class ProteinEncoder(torch.nn.Module):
         full_pos = torch.vstack((atom_pos, vox_pos))
         full_batch = torch.hstack((atom_batch, vox_batch))
 
-        atom_node_index = torch.arange(atom_x.size(0))
-        vox_node_index = torch.arange(vox_x.size(0)) + atom_node_index.size(0)
+        atom_node_index = torch.arange(atom_x.size(0)).to(device)
+        vox_node_index = (torch.arange(vox_x.size(0)) + atom_node_index.size(0)).to(
+            device
+        )
 
         edge_combos = [
             (self.atom_edge_MLP, [atom_node_index, atom_node_index, self.atom_k]),

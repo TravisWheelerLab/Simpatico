@@ -10,7 +10,6 @@ from torch_geometric.data import Dataset
 
 
 def main():
-
     parser = argparse.ArgumentParser(
         description="Generate train/validation PyG graph datasets from existing PyG graph files."
     )

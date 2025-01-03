@@ -1,4 +1,5 @@
 # scripts/train.py
+# scripts/train.py
 import sys
 import argparse
 import torch
@@ -115,21 +116,19 @@ def main(args):
     protein_encoder = ProteinEncoder(**ProteinEncoderDefaults).to(device)
     mol_encoder = MolEncoder(**MolEncoderDefaults).to(device)
 
-    best_validation_score = 0
-
     if args.load_model:
         protein_model_weights, mol_model_weights = torch.load(args.weight_path)
 
         protein_encoder.load_state_dict(protein_model_weights)
         mol_encoder.load_state_dict(mol_model_weights)
 
-        best_validation_score, _ = validate(
+        initial_validation_score, _ = validate(
             protein_encoder,
             mol_encoder,
             validation_loader,
             device,
         )
-        log_text(f"Best validation score: {best_validation_score}")
+        log_text(f"Best validation score: {initial_validation_score}")
 
     optimizer = torch.optim.AdamW(
         list(protein_encoder.parameters()) + list(mol_encoder.parameters()),
@@ -137,6 +136,7 @@ def main(args):
     )
 
     get_hard_negative_difficulty = hard_negative_scheduler(50, 0.05)
+    prot_loss = True
 
     for epoch in range(args.epoch_start, args.epochs + 1):
         difficulty_value = get_hard_negative_difficulty(epoch)
@@ -144,15 +144,12 @@ def main(args):
         log_text(log_message)
 
         loss_vals = []
-        prot_loss = True
 
         for batch_idx in range(train_loader.size // args.batch_size):
-            torch.cuda.empty_cache()
-            # prot_loss = not prot_loss
+            prot_loss = not prot_loss
 
-            optimizer.zero_grad()
-            protein_batch, molecule_batch = train_loader.get_random_batch(
-                batch_size=args.batch_size
+            protein_batch, molecule_batch, shuffled_mol_batch = (
+                train_loader.get_random_batch(batch_size=args.batch_size)
             )
 
             protein_batch = protein_batch.clone()
@@ -164,8 +161,21 @@ def main(args):
             protein_out = protein_encoder(protein_batch)
             mol_out = mol_encoder(molecule_batch)
 
+            if shuffled_mol_batch is not None:
+                shuffled_mol_batch = shuffled_mol_batch.to(device)
+                shuffled_mol_out = mol_encoder(shuffled_mol_batch)
+                affected_mask = shuffled_mol_batch.affected_mask
+            else:
+                shuffled_mol_out = None
+                affected_mask = None
+
             output_handler = TrainingOutputHandler(
-                *protein_out, mol_out, molecule_batch.pos, molecule_batch.batch
+                *protein_out,
+                mol_out,
+                molecule_batch.pos,
+                molecule_batch.batch,
+                shuffled_mol_out,
+                affected_mask,
             )
 
             if prot_loss:
@@ -181,6 +191,13 @@ def main(args):
                 anchor_samples, positive_samples, negative_samples
             )
 
+            a_shuf, p_shuf, n_shuf = output_handler.get_shuffled_anchor_pairs()
+
+            if shuffled_mol_batch is not None:
+                l2 = positive_margin_loss(a_shuf, p_shuf, n_shuf)
+                print(loss, l2)
+                loss += 0.5 * l2
+
             loss_vals.append(loss)
 
             if batch_idx % 10 == 0:
@@ -189,7 +206,11 @@ def main(args):
                 loss_vals = []
 
             loss.backward()
-            optimizer.step()
+
+            if prot_loss:
+                optimizer.step()
+                optimizer.zero_grad()
+                torch.cuda.empty_cache()
 
         epoch_validation_score, _ = validate(
             protein_encoder,
@@ -200,15 +221,12 @@ def main(args):
 
         log_text(f"Epoch {epoch} validation: {epoch_validation_score}")
 
-        if epoch_validation_score > best_validation_score:
-            best_validation_score = epoch_validation_score
+        torch.save(
+            [protein_encoder.state_dict(), mol_encoder.state_dict()],
+            args.weight_path,
+        )
 
-            torch.save(
-                [protein_encoder.state_dict(), mol_encoder.state_dict()],
-                args.weight_path,
-            )
-
-            log_text(f"Weights updated")
+        log_text(f"Weights updated")
 
 
 if __name__ == "__main__":

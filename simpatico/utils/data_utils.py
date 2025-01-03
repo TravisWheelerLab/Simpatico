@@ -4,6 +4,143 @@ from torch_geometric.data import Batch, Data
 from torch_geometric.nn import radius, knn
 import torch
 from simpatico.utils import graph_utils
+from simpatico.utils.utils import get_k_hop_edges
+
+
+def update_h_count(h_data, increment=True):
+    """
+    Increment or decrement one-hot hydrogen data.
+    """
+    updated_h_data = torch.zeros_like(h_data)
+    h_counts = torch.where(h_data)[1]
+
+    if increment:
+        h_counts += 1
+    else:
+        h_counts -= 1
+
+    updated_h_data[torch.arange(h_counts.size(0)), h_counts] = 1
+    return updated_h_data
+
+
+def get_affected_atoms(mol_batch, altered_mask, k=3):
+    affected_mask = torch.zeros(altered_mask.size(0)).bool()
+    # Edges representing atoms within k covalent bonds will have a 1
+    # before the kth index of the edge feature one hot
+    edge_mask = mol_batch.edge_attr[:, :k].sum(1).bool()
+    ei = mol_batch.edge_index[:, edge_mask]
+
+    affected_edge_mask = altered_mask[ei].T.int().sum(1) > 0
+    affected_nodes = ei[:, affected_edge_mask].flatten().unique()
+    affected_mask[affected_nodes] = True
+
+    return affected_mask
+
+
+def shuffle_sidechains(mol_batch, k_affected=2):
+    """
+    Shuffles sidechain-scaffold connections on PyG batch of molecular graphs.
+    """
+    shuffled_batch = mol_batch.clone()
+
+    # Set mask to True if corresponding scaffold atom
+    # is adjacent to new sidechain or loses sidechain
+    altered_mask = torch.zeros(shuffled_batch.x.size(0)).bool()
+
+    # remove all 2+ hop edges
+    one_edges = torch.where(shuffled_batch.edge_attr[:, 0] == 1)[0]
+    one_ei = shuffled_batch.edge_index[:, one_edges]
+
+    # for simplicity, make scaffold-to-sidechain edges directed
+    scaffold_to_sc_mask = shuffled_batch.scaffold[one_ei]
+    # negate second row so True-True pairs represent scaffold-to-sidechain edges
+    scaffold_to_sc_mask[1] = ~scaffold_to_sc_mask[1]
+    scaffold_to_sc_mask = scaffold_to_sc_mask.T.all(1)
+
+    # Now there are no scaffold-to-sidechain edges
+    updated_ei = one_ei[:, ~scaffold_to_sc_mask]
+
+    # Get mask for sidechain-to-scaffold edges
+    link_mask = shuffled_batch.scaffold[updated_ei]
+    link_mask[0] = ~link_mask[0]
+    link_mask = torch.all(link_mask.T, dim=1)
+
+    old_link_edges = updated_ei[:, link_mask].clone()
+
+    # reduce old linking scaffold atoms
+    scaffold_link_atoms = updated_ei[1][link_mask]
+    link_atom_h_data = shuffled_batch.x[scaffold_link_atoms, -4:].clone()
+
+    shuffled_batch.x[scaffold_link_atoms, -4:] = update_h_count(
+        link_atom_h_data, increment=True
+    )
+
+    altered_mask[scaffold_link_atoms] = True
+
+    # set directional linking edges to random candidate linker carbon atoms
+    candidate_mask = torch.all(
+        torch.vstack(
+            (
+                # Conditions:
+                #   - is a scaffold atom
+                shuffled_batch.scaffold,
+                #   - is a carbon
+                shuffled_batch.x[:, 4] == 1,
+                #   - is not fully oxidized
+                shuffled_batch.x[:, -4] == 0,
+            )
+        ).T,
+        dim=1,
+    )
+
+    candidate_index = torch.where(candidate_mask)[0]
+    candidate_batch = shuffled_batch.batch[candidate_index]
+    link_batch = shuffled_batch.batch[updated_ei[1, link_mask]]
+
+    new_link_atoms = []
+
+    for bi in link_batch.unique():
+        candidate_link_atoms = candidate_index[candidate_batch == bi]
+        shuffled_candidates = candidate_link_atoms[
+            torch.randperm(candidate_link_atoms.size(0))
+        ]
+
+        # if there are fewer candidate link atoms than sidechains,
+        # shuffling molecule requires specialized process.
+        # Just skip for now.
+        if shuffled_candidates.size(0) < (link_batch == bi).sum():
+            link_mask[shuffled_batch.batch[updated_ei[1]] == bi] = False
+            continue
+
+        updated_link_atoms = shuffled_candidates[: (link_batch == bi).sum()]
+        updated_mask = (old_link_edges[1, link_batch == bi] - updated_link_atoms).bool()
+
+        # If sidechain is assigned to the same scaffold link atom,
+        # negate altered mask at link atom index.
+        altered_mask[updated_link_atoms[~updated_mask]] = False
+
+        # likewise, set altered mask to True for any new scaffold link atoms
+        altered_mask[updated_link_atoms[updated_mask]] = True
+
+        new_link_atoms.append(shuffled_candidates[: (link_batch == bi).sum()])
+
+    new_link_atoms = torch.hstack(new_link_atoms)
+    updated_ei[1, link_mask] = new_link_atoms
+
+    # oxidate new linking scaffold atoms
+    new_link_h_data = shuffled_batch.x[new_link_atoms, -4:].clone()
+    shuffled_batch.x[new_link_atoms, -4:] = update_h_count(
+        new_link_h_data, increment=False
+    )
+
+    final_edge_index, final_edge_attr = get_k_hop_edges(updated_ei)
+    shuffled_batch.edge_index = final_edge_index
+    shuffled_batch.edge_attr = final_edge_attr
+    shuffled_batch.affected_mask = get_affected_atoms(
+        shuffled_batch, altered_mask, k_affected
+    )
+
+    return shuffled_batch
 
 
 class ProteinLigandDataLoader:
@@ -65,7 +202,7 @@ class ProteinLigandDataLoader:
         pocket_mask: bool = True,
         proteins_only: bool = False,
         mols_only: bool = False,
-    ) -> Tuple[Batch, Batch] | Batch:
+    ):
         protein_list = []
         mol_list = []
 
@@ -82,7 +219,12 @@ class ProteinLigandDataLoader:
                 protein_list.append(protein_graph)
 
             if proteins_only is False:
-                mol_list.append(self.ligands[g_idx.item()])
+                mol_graph = self.ligands[g_idx.item()]
+
+                if hasattr(mol_graph, "scaffold") == False:
+                    mol_graph.scaffold = torch.zeros(mol_graph.x.size(0)).bool()
+
+                mol_list.append(mol_graph)
 
         if mols_only is False:
             protein_batch = Batch.from_data_list(protein_list)
@@ -95,7 +237,10 @@ class ProteinLigandDataLoader:
         if mols_only is True:
             return mol_batch
 
-        return protein_batch, mol_batch
+        shuffled_mol_batch = shuffle_sidechains(mol_batch)
+        # shuffled_mol_batch = None
+
+        return protein_batch, mol_batch, shuffled_mol_batch
 
     def get_random_batch(
         self,
@@ -110,7 +255,15 @@ class ProteinLigandDataLoader:
 
 class TrainingOutputHandler:
     def __init__(
-        self, protein_embeds, protein_pos, protein_batch, mol_embeds, mol_pos, mol_batch
+        self,
+        protein_embeds,
+        protein_pos,
+        protein_batch,
+        mol_embeds,
+        mol_pos,
+        mol_batch,
+        shuffled_mol_embeds,
+        affected_mask,
     ):
         self.protein_embeds = protein_embeds
         self.protein_pos = protein_pos
@@ -119,6 +272,9 @@ class TrainingOutputHandler:
         self.mol_embeds = mol_embeds
         self.mol_pos = mol_pos
         self.mol_batch = mol_batch
+
+        self.shuffled_mol_embeds = shuffled_mol_embeds
+        self.affected_mask = affected_mask
 
         self.mol_actives, self.prot_actives = radius(
             protein_pos, mol_pos, 4, protein_batch, mol_batch
@@ -255,4 +411,12 @@ class TrainingOutputHandler:
             self.mol_embeds[self.mol_actives],
             self.protein_embeds[self.prot_actives],
             self.protein_embeds[all_negatives],
+        )
+
+    def get_shuffled_anchor_pairs(self):
+        active_affected_mask = self.affected_mask[self.mol_actives]
+        return (
+            self.protein_embeds[self.prot_actives][active_affected_mask],
+            self.mol_embeds[self.mol_actives][active_affected_mask],
+            self.shuffled_mol_embeds[self.mol_actives][active_affected_mask],
         )

@@ -34,6 +34,7 @@ def main():
         pg = torch.load(pg_file)
 
         for mf in mol_files:
+            print(mf.split("/")[-2])
             if pdb_id == mf.split("/")[-2]:
                 m = MolFromMol2File(mf, sanitize=False)
                 m.GetConformer()
@@ -49,8 +50,12 @@ def main():
 
                 mol_pos = torch.tensor(mol_pos)
 
-                pocket_center_atom = torch.cdist(mol_pos, mol_pos).mean(1).argmin()
-                pg.pocket_mask = get_pocket_mask(pg, mol_pos[pocket_center_atom])
+                proximal_protein_atoms = radius(mol_pos, pg.pos, 4)[0].unique()
+                pocket_mask = torch.zeros(pg.pos.size(0)).bool()
+                pocket_mask[proximal_protein_atoms] = True
+
+                pg.pocket_mask = pocket_mask
+
                 pg.name = pdb_id
                 torch.save(pg, pg_file)
 

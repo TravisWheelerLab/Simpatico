@@ -1,4 +1,6 @@
 # scripts/train.py
+import os
+from pathlib import Path
 import sys
 import argparse
 import torch
@@ -27,6 +29,9 @@ def get_args():
     )
     parser.add_argument("-w", "--weight_location")
     parser.add_argument("-o", "--output_path")
+    parser.add_argument(
+        "--no-overwrite", action="store_true", help="Do not overwrite existing files"
+    )
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument(
         "-p", "--protein", action="store_true", help="Get protein atom embeddings."
@@ -78,6 +83,14 @@ def main(args):
         outfile = (
             args.output_path + "/" + gf.split("/")[-1].split(".")[0] + "_embeds.pyg"
         )
+
+        if args.no_overwrite:
+            if os.path.exists(outfile) and os.path.getsize(outfile) > 0:
+                continue
+            else:
+                # create an empty file so parallel jobs know to skip current target
+                Path(outfile).touch()
+
         input_g = torch.load(gf)
 
         if args.protein:

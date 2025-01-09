@@ -36,6 +36,11 @@ def main():
              [--dirname-level 2] produces pyg files like 'pdb_dir_pdb_filename.pyg'.
         """,
     )
+    parser.add_argument(
+        "--scaffolding",
+        action="store_true",
+        help="When possible, generate a molecular scaffolding mask for each molecule.",
+    )
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument(
         "-p", "--protein", action="store_true", help="Generate protein PyG graph files."
@@ -65,7 +70,7 @@ def main():
         # insert filename into output file template to produce output path for final PyG file
 
         if args.no_overwrite:
-            if os.path.exists(graph_file_out):
+            if os.path.exists(graph_file_out) and os.path.getsize(graph_file_out) > 0:
                 continue
             else:
                 # create an empty file so parallel jobs know to skip current target
@@ -75,7 +80,9 @@ def main():
         if args.protein:
             new_graph = pdb2pyg(structure_f)
         else:
-            new_graph = molfile2pyg(structure_f, get_pos=True)
+            new_graph = molfile2pyg(
+                structure_f, get_pos=True, get_scaffold=args.scaffolding
+            )
 
         # if conversion is unsuccessful, will return None
         if new_graph is None:

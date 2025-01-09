@@ -137,7 +137,7 @@ def get_H_counts(
 
 
 def mol2pyg(
-    m: Mol, ignore_pos: bool = False, removeHs: bool = True, get_scaffold=True
+    m: Mol, ignore_pos: bool = False, removeHs: bool = True, get_scaffold=False
 ) -> Optional[Data]:
     """
     Converts an RDKit Mol object into a PyG Data object representing the molecular graph.
@@ -240,7 +240,9 @@ def mol2pyg(
     return mol_graph
 
 
-def molfile2pyg(m_file: str, get_pos: bool = True, k: int = 3) -> Optional[Batch]:
+def molfile2pyg(
+    m_file: str, get_pos: bool = True, k: int = 3, get_scaffold: bool = False
+) -> Optional[Batch]:
     """
     Converts a molecular file (e.g., SDF, PDB) into a batch of molecular PyG graphs.
     Args:
@@ -261,7 +263,7 @@ def molfile2pyg(m_file: str, get_pos: bool = True, k: int = 3) -> Optional[Batch
     elif filetype == "pdb":
         mols = [Chem.MolFromPDBFile(m_file, sanitize=False)]
 
-    elif filetype in ["ism", "smi"]:
+    elif filetype in ["ism", "smi", "cxsmiles"]:
         mols = Chem.SmilesMolSupplier(m_file, sanitize=False)
         ignore_pos = True
 
@@ -273,7 +275,7 @@ def molfile2pyg(m_file: str, get_pos: bool = True, k: int = 3) -> Optional[Batch
 
     for m_i, m in enumerate(mols):
         # Convert each molecule to a PyG graph
-        mg = mol2pyg(m, ignore_pos)
+        mg = mol2pyg(m, ignore_pos, get_scaffold=get_scaffold)
 
         if mg is None:
             # Skip molecules that failed to convert

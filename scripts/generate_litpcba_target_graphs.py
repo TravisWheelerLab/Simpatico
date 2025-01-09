@@ -9,7 +9,7 @@ import subprocess
 from torch_geometric.nn import radius
 
 parser = argparse.ArgumentParser(
-    description="identify the largest ligand-based pocket for each LITPCBA target"
+    description="Generate LITPCBA protein graphs and set pocket mask data."
 )
 parser.add_argument(
     "-d",

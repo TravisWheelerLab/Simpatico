@@ -244,10 +244,7 @@ class ProteinLigandDataLoader:
         if mols_only is True:
             return mol_batch
 
-        shuffled_mol_batch = shuffle_sidechains(mol_batch)
-        # shuffled_mol_batch = None
-
-        return protein_batch, mol_batch, shuffled_mol_batch
+        return protein_batch, mol_batch
 
     def get_random_batch(
         self,

@@ -148,8 +148,8 @@ def main(args):
         for batch_idx in range(train_loader.size // args.batch_size):
             prot_loss = not prot_loss
 
-            protein_batch, molecule_batch, shuffled_mol_batch = (
-                train_loader.get_random_batch(batch_size=args.batch_size)
+            protein_batch, molecule_batch = train_loader.get_random_batch(
+                batch_size=args.batch_size
             )
 
             protein_batch = protein_batch.clone()
@@ -161,21 +161,11 @@ def main(args):
             protein_out = protein_encoder(protein_batch)
             mol_out = mol_encoder(molecule_batch)
 
-            if shuffled_mol_batch is not None:
-                shuffled_mol_batch = shuffled_mol_batch.to(device)
-                shuffled_mol_out = mol_encoder(shuffled_mol_batch)
-                affected_mask = shuffled_mol_batch.affected_mask
-            else:
-                shuffled_mol_out = None
-                affected_mask = None
-
             output_handler = TrainingOutputHandler(
                 *protein_out,
                 mol_out,
                 molecule_batch.pos,
                 molecule_batch.batch,
-                shuffled_mol_out,
-                affected_mask,
             )
 
             if prot_loss:
@@ -190,17 +180,6 @@ def main(args):
             loss = positive_margin_loss(
                 anchor_samples, positive_samples, negative_samples
             )
-
-            if shuffled_mol_batch is not None:
-                a_shuf, p_shuf, n_shuf = output_handler.get_shuffled_anchor_pairs()
-
-                if a_shuf.size(0) > 0:
-                    shuffled_loss_ratio = a_shuf.size(0) / float(
-                        a_shuf.size(0) + anchor_samples.size(0)
-                    )
-
-                    l2 = positive_margin_loss(a_shuf, p_shuf, n_shuf)
-                    loss = shuffled_loss_ratio * l2 + (1 - shuffled_loss_ratio) * loss
 
             loss_vals.append(loss)
 

@@ -266,8 +266,6 @@ class TrainingOutputHandler:
         mol_embeds,
         mol_pos,
         mol_batch,
-        shuffled_mol_embeds,
-        affected_mask,
     ):
         self.protein_embeds = protein_embeds
         self.protein_pos = protein_pos
@@ -276,9 +274,6 @@ class TrainingOutputHandler:
         self.mol_embeds = mol_embeds
         self.mol_pos = mol_pos
         self.mol_batch = mol_batch
-
-        self.shuffled_mol_embeds = shuffled_mol_embeds
-        self.affected_mask = affected_mask
 
         self.mol_actives, self.prot_actives = radius(
             protein_pos, mol_pos, 4, protein_batch, mol_batch
@@ -415,12 +410,4 @@ class TrainingOutputHandler:
             self.mol_embeds[self.mol_actives],
             self.protein_embeds[self.prot_actives],
             self.protein_embeds[all_negatives],
-        )
-
-    def get_shuffled_anchor_pairs(self):
-        active_affected_mask = self.affected_mask[self.mol_actives]
-        return (
-            self.protein_embeds[self.prot_actives][active_affected_mask],
-            self.mol_embeds[self.mol_actives][active_affected_mask],
-            self.shuffled_mol_embeds[self.mol_actives][active_affected_mask],
         )

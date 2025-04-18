@@ -130,6 +130,7 @@ def get_H_counts(
     H_neighbors, H_counts = heavy_to_hydrogen_edges[0].unique(return_counts=True)
 
     # update one hot to reflect number of hydrogens connected to each heavy atom
+    H_counts[H_counts > 3] = 3
     H_count_features[H_neighbors.long(), H_counts.long()] = 1
     # For atoms not connect to a hydrogen, set first index of onehot to 1 to indicate zero Hs
     H_count_features[H_count_features.sum(1) == 0, 0] = 1
@@ -276,13 +277,20 @@ def molfile2pyg(
     for m_i, m in enumerate(mols):
         # Convert each molecule to a PyG graph
         mg = mol2pyg(m, ignore_pos, get_scaffold=get_scaffold)
-
         if mg is None:
             # Skip molecules that failed to convert
             continue
         else:
+            if m.HasProp("_Name"):
+                m_name = m.GetProp("_Name")
+            else:
+                m_name = ""
+
+            if len(m_name) == 0:
+                m_name = filename + f"_{m_i}"
+
             # Assign a name to the graph based on the file name and molecule index
-            mg.name = filename + f"_{m_i}"
+            mg.name = m_name
             mol_batch.append(mg)
 
     if len(mol_batch) == 0:

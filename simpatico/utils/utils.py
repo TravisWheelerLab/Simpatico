@@ -1,4 +1,5 @@
 import torch
+import argparse
 from torch_geometric.utils import k_hop_subgraph, to_undirected
 from typing import List, Tuple, Optional
 
@@ -91,3 +92,11 @@ def get_k_hop_edges(edge_index: torch.Tensor, k: int = 3) -> torch.Tensor:
     return to_undirected(
         final_edge_index.long(), torch.tensor(edge_attr), reduce="mean"
     )
+
+
+class SmartFormatter(argparse.HelpFormatter):
+    def _split_lines(self, text, width):
+        if text.startswith("R|"):
+            return text[2:].splitlines()
+        # this is the RawTextHelpFormatter._split_lines
+        return argparse.HelpFormatter._split_lines(self, text, width)

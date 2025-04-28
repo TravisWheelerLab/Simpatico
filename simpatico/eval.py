@@ -18,18 +18,25 @@ from simpatico.models.molecule_encoder.MolEncoder import MolEncoder
 from simpatico.models.protein_encoder.ProteinEncoder import ProteinEncoder
 from simpatico.models import MolEncoderDefaults, ProteinEncoderDefaults
 from simpatico.utils.pdb_utils import pdb2pyg
+from simpatico.utils.utils import SmartFormatter
 
 from typing import Callable
 from glob import glob
 
 
 def get_args():
-    parser = argparse.ArgumentParser(description="Training Script")
+    parser = argparse.ArgumentParser(
+        description="Evaluation script", formatter_class=SmartFormatter
+    )
     parser.add_argument(
-        "-d",
-        "--data_path",
+        "-i",
+        "--input_path",
         type=str,
-        help="Path to the dataset",
+        help="R|Path to input file.\n"
+        "- Protein: .pdb file\n"
+        "- Small molecule: .smi, .ism, .sdf, or .pdb file\n"
+        "- Batch: .txt file with one path per line\n"
+        "  * For proteins: each line = .pdb path, pocket spec (comma-separated)",
     )
     parser.add_argument("-w", "--weight_location")
     parser.add_argument("-o", "--output_path")
@@ -38,13 +45,16 @@ def get_args():
     )
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument(
-        "-p", "--protein", action="store_true", help="Get protein atom embeddings."
+        "-p",
+        "--protein",
+        action="store_true",
+        help="Indicates protein evaluation.",
     )
     group.add_argument(
         "-m",
         "--molecule",
         action="store_true",
-        help="Get molecule atom embeddings",
+        help="Indicates molecule evaluation.",
     )
     parser.add_argument(
         "--device",
@@ -59,15 +69,11 @@ def get_args():
         help="Protein pocket center coordinates in the form X,Y,Z e.g '-c 20.3,-12,10.25",
     )
     parser.add_argument("-r", "--radius", type=float, help="Protein pocket radius")
-    parser.add_argument("-b", "--batch_size", type=int, default=1024)
     parser.add_argument(
-        "--pocket-ligand",
+        "--pocket-coords",
         type=str,
         default=None,
-        help="Directory to ligand graphs that describe pocket.",
-    )
-    parser.add_argument(
-        "--pocket-id", type=str, default=None, help="Pocket ligand name"
+        help=".txt file listing coordinates that of protein pocket. Overrides inline pocket specification.",
     )
 
     return parser.parse_args()
@@ -78,6 +84,8 @@ def main(args):
 
     if args.protein:
         encoder = ProteinEncoder(**ProteinEncoderDefaults).to(device)
+        # Weights for protein and ligand models are stored in one file.
+        # first item is protein model weights, second is molecule model weights
         weight_index = 0
 
     elif args.molecule:
@@ -90,12 +98,14 @@ def main(args):
 
     encoder.eval()
 
-    graph_files = glob(args.data_path)
+    input_files = glob(args.input_path)
+    print(input_files)
+    sys.exit()
 
     if args.pocket_ligand:
         pocket_ligands = glob(args.pocket_ligand)
 
-    for gf in graph_files:
+    for gf in input_files:
         embed_failed = False
         outfile = (
             args.output_path + "/" + gf.split("/")[-1].split(".")[0] + "_embeds.pyg"
@@ -138,7 +148,7 @@ def main(args):
         if args.protein:
             input_g = Batch.from_data_list([input_g])
 
-        data_loader = DataLoader(input_g, batch_size=args.batch_size, shuffle=False)
+        data_loader = DataLoader(input_g, batch_size=1024, shuffle=False)
         data_out = []
 
         for batch in data_loader:

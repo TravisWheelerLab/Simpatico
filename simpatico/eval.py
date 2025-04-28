@@ -97,18 +97,23 @@ def main(args):
     )
 
     encoder.eval()
+    input_file = args.input_path
 
-    input_files = glob(args.input_path)
-    print(input_files)
-    sys.exit()
+    if input_file.split(".")[-1] == "txt":
+        input_files = []
+        with open(input_file, "r") as input_in:
+            for line in input_in:
+                input_files.append(line.rstrip())
+    else:
+        input_files = [input_file]
 
-    if args.pocket_ligand:
-        pocket_ligands = glob(args.pocket_ligand)
-
-    for gf in input_files:
+    for structure_file in input_files:
         embed_failed = False
         outfile = (
-            args.output_path + "/" + gf.split("/")[-1].split(".")[0] + "_embeds.pyg"
+            args.output_path
+            + "/"
+            + structure_file.split("/")[-1].split(".")[0]
+            + "_embeds.pyg"
         )
 
         if args.no_overwrite:
@@ -118,32 +123,12 @@ def main(args):
                 # create an empty file so parallel jobs know to skip current target
                 Path(outfile).touch()
 
-        if gf.split(".")[-1] == "pdb":
-            input_g = pdb2pyg(gf, args.pocket_id)
-        elif gf.split(".")[-1] in ["sdf", "ism", "smi"]:
-            input_g = molfile2pyg(gf, get_pos=True)
+        if structure_file.split(".")[-1] == "pdb":
+            input_g = pdb2pyg(structure_file, args.pocket_id)
+        elif structure_file.split(".")[-1] in ["sdf", "ism", "smi"]:
+            input_g = molfile2pyg(structure_file, get_pos=True)
         else:
-            input_g = torch.load(gf)
-
-        if args.pocket_ligand:
-            for lf in pocket_ligands:
-                lf_id = lf.split("/")[-1].split("_")[0]
-
-                if gf.split("/")[-1].split("_")[0] == lf_id:
-                    if lf.split(".")[-1] == "txt":
-                        with open(lf) as lf_txt:
-                            pos = []
-                            for line in lf_txt:
-                                xyz = [float(v) for v in line.split(" ")[:3]]
-                                pos.append(xyz)
-                        lg = Data(pos=torch.tensor(pos))
-                    else:
-                        lg = torch.load(lf)
-
-                    pocket_mask = torch.zeros(input_g.x.size(0)).bool()
-                    proximal_atoms = radius(lg.pos, input_g.pos, 4)[0].unique()
-                    pocket_mask[proximal_atoms] = True
-                    input_g.pocket_mask = pocket_mask
+            input_g = torch.load(structure_file)
 
         if args.protein:
             input_g = Batch.from_data_list([input_g])
@@ -154,7 +139,7 @@ def main(args):
         for batch in data_loader:
             if args.protein:
                 if hasattr(batch, "pocket_mask") == False:
-                    print("No pocket mask specified for %s" % gf)
+                    print("No pocket mask specified for %s" % structure_file)
 
                     if args.no_overwrite:
                         os.remove(outfile)

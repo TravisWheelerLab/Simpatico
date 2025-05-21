@@ -19,6 +19,7 @@ from simpatico.models.protein_encoder.ProteinEncoder import ProteinEncoder
 from simpatico.models import MolEncoderDefaults, ProteinEncoderDefaults
 from simpatico.utils.pdb_utils import pdb2pyg
 from simpatico.utils.utils import SmartFormatter
+from simpatico.utils.utils import get_xyz_from_file
 
 from typing import Callable
 from glob import glob
@@ -73,7 +74,7 @@ def get_args():
         "--pocket-coords",
         type=str,
         default=None,
-        help=".txt file listing coordinates that of protein pocket. Overrides inline pocket specification.",
+        help=".txt, .mol2, .sdf, or .pdb describing coordinates of protein pocket. Overrides inline pocket specification.",
     )
 
     return parser.parse_args()
@@ -98,16 +99,28 @@ def main(args):
 
     encoder.eval()
     input_file = args.input_path
+    input_filetype = input_file.split(".")[-1]
 
-    if input_file.split(".")[-1] == "txt":
-        input_files = []
+    input_list = []
+    pocket_spec_list = []
+
+    if input_filetype in ["txt", "csv"]:
         with open(input_file, "r") as input_in:
             for line in input_in:
-                input_files.append(line.rstrip())
-    else:
-        input_files = [input_file]
+                line_content = line.split(",")
+                input_list.append(line_content[0].strip())
 
-    for structure_file in input_files:
+                if len(line_content) > 1:
+                    pocket_spec_list.append(line_content[1].strip())
+    else:
+        input_list = [input_file]
+
+    for file_i, structure_file in enumerate(input_list):
+        pocket_spec = None
+
+        if len(pocket_spec_list) > file_i:
+            pocket_spec = get_xyz_from_file(pocket_spec_list[file_i])
+
         embed_failed = False
         outfile = (
             args.output_path
@@ -123,9 +136,11 @@ def main(args):
                 # create an empty file so parallel jobs know to skip current target
                 Path(outfile).touch()
 
-        if structure_file.split(".")[-1] == "pdb":
-            input_g = pdb2pyg(structure_file, args.pocket_id)
-        elif structure_file.split(".")[-1] in ["sdf", "ism", "smi"]:
+        structure_filetype = structure_file.split(".")[-1]
+
+        if structure_filetype == "pdb":
+            input_g = pdb2pyg(structure_file, pocket_spec)
+        elif structure_filetype in ["sdf", "ism", "smi"]:
             input_g = molfile2pyg(structure_file, get_pos=True)
         else:
             input_g = torch.load(structure_file)

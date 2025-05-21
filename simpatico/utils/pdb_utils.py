@@ -42,7 +42,7 @@ def get_pdb_line_data(line: str) -> Tuple[List[float], List[float]]:
     return onehot, pos
 
 
-def pdb2pyg(pdb_path: str, pocket_ligand=None) -> Data:
+def pdb2pyg(pdb_path: str, pocket_spec=None) -> Data:
     """
     Converts PDB file int PyG graph
     Args:
@@ -52,19 +52,12 @@ def pdb2pyg(pdb_path: str, pocket_ligand=None) -> Data:
     """
     graph_x = []
     graph_pos = []
-    pocket_pos = []
 
     # Use the filename (without extension) as graph name
     pdb_name = pdb_path.split("/")[-1].split(".")[0]
 
     with open(pdb_path) as pdb_in:
         for line in pdb_in:
-            if pocket_ligand is not None:
-                if line[0:6] == "HETATM":
-                    if line[17:20].strip() == pocket_ligand:
-                        _, pos = get_pdb_line_data(line)
-                        pocket_pos.append(pos)
-
             # Only interested in ATOM lines
             if line[0:4] == "ATOM":
                 # Skip hydrogens.
@@ -79,10 +72,9 @@ def pdb2pyg(pdb_path: str, pocket_ligand=None) -> Data:
 
     g = Data(x=torch.tensor(graph_x), pos=torch.tensor(graph_pos), name=pdb_name)
 
-    if pocket_ligand is not None:
-        pocket_pos = torch.tensor(pocket_pos)
+    if pocket_spec is not None:
         pocket_mask = torch.zeros(g.x.size(0)).bool()
-        proximal_atoms, _ = radius(pocket_pos, g.pos, 5)
+        proximal_atoms, _ = radius(pocket_spec, g.pos, 5)
         pocket_mask[proximal_atoms] = True
         g.pocket_mask = pocket_mask
 

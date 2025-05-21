@@ -1,4 +1,5 @@
 import torch
+import re
 import argparse
 from torch_geometric.utils import k_hop_subgraph, to_undirected
 from typing import List, Tuple, Optional
@@ -92,6 +93,30 @@ def get_k_hop_edges(edge_index: torch.Tensor, k: int = 3) -> torch.Tensor:
     return to_undirected(
         final_edge_index.long(), torch.tensor(edge_attr), reduce="mean"
     )
+
+
+def get_mol2_coords(input_file):
+    coord_pattern = re.compile(
+        r"^\s*\d+\s+\S+\s+([-+]?\d*\.\d+|\d+)\s+([-+]?\d*\.\d+|\d+)\s+([-+]?\d*\.\d+|\d+)"
+    )
+    coord_list = []
+
+    with open(input_file) as file_in:
+        for line in file_in:
+            match = coord_pattern.match(line)
+            if match:
+                xyz = [float(v) for v in match.groups()]
+                coord_list.append(xyz)
+
+    return torch.tensor(coord_list)
+
+
+def get_xyz_from_file(input_file):
+    filetype = input_file.split(".")[-1]
+    if filetype == "mol2":
+        xyz_coords = get_mol2_coords(input_file)
+
+    return xyz_coords
 
 
 class SmartFormatter(argparse.HelpFormatter):

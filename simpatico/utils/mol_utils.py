@@ -1,4 +1,5 @@
 import re
+import os
 from copy import deepcopy
 import torch
 import numpy as np
@@ -254,7 +255,9 @@ def molfile2pyg(
         Optional[Batch]: A batch of PyG Data objects, or None if conversion fails.
     """
     # Extract the filename and filetype from the input file path
-    filename, filetype = m_file.split("/")[-1].split(".")
+    filename, filetype = os.path.splitext(m_file)
+    filetype = filetype[1:]
+    # filename, filetype = m_file.split("/")[-1].split(".")
     ignore_pos = False
 
     # Use appropriate RDKit method for generating Molecule object from file

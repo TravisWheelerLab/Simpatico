@@ -101,10 +101,11 @@ def logger(output_path):
 
 
 def main(args):
-    device = args.device
+    device = torch.device(args.device)
+
     log_text = logger(args.output)
     # Load data
-    train_data, validation_data = torch.load(args.data_path)
+    train_data, validation_data = torch.load(args.data_path, weights_only=False)
 
     if args.output is not None:
         with open(args.output, "w"):
@@ -117,7 +118,9 @@ def main(args):
     mol_encoder = MolEncoder(**MolEncoderDefaults).to(device)
 
     if args.load_model:
-        protein_model_weights, mol_model_weights = torch.load(args.weight_path)
+        protein_model_weights, mol_model_weights = torch.load(
+            args.weight_path, weights_only=False
+        )
 
         protein_encoder.load_state_dict(protein_model_weights)
         mol_encoder.load_state_dict(mol_model_weights)
@@ -236,9 +239,6 @@ if __name__ == "__main__":
         type=str,
         default="cuda" if torch.cuda.is_available() else "cpu",
         help="Device to use for training",
-    )
-    parser.add_argument(
-        "--save_model", action="store_true", help="For Saving the current Model"
     )
     parser.add_argument("-w", "--weight_path")
     parser.add_argument(

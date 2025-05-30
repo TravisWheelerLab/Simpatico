@@ -25,10 +25,7 @@ from typing import Callable
 from glob import glob
 
 
-def get_args():
-    parser = argparse.ArgumentParser(
-        description="Evaluation script", formatter_class=SmartFormatter
-    )
+def add_arguments(parser):
     parser.add_argument(
         "-i",
         "--input_path",
@@ -77,7 +74,8 @@ def get_args():
         help=".txt, .mol2, .sdf, or .pdb describing coordinates of protein pocket. Overrides inline pocket specification.",
     )
 
-    return parser.parse_args()
+    parser.set_defaults(func=main)
+    return parser
 
 
 def main(args):
@@ -187,5 +185,7 @@ def main(args):
 
 
 if __name__ == "__main__":
-    args = get_args()
-    main(args)
+    parser = argparse.ArgumentParser(description="Evaluation tool")
+    add_arguments(parser)
+    args = parser.parse_args()
+    args.func(args)

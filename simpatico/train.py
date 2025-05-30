@@ -1,5 +1,3 @@
-# scripts/train.py
-# scripts/train.py
 import sys
 import argparse
 import torch
@@ -12,6 +10,46 @@ from simpatico.models.molecule_encoder.MolEncoder import MolEncoder
 from simpatico.models.protein_encoder.ProteinEncoder import ProteinEncoder
 from simpatico.models import MolEncoderDefaults, ProteinEncoderDefaults
 from typing import Callable
+
+
+def add_arguments(parser):
+    parser.add_argument(
+        "-d",
+        "--data_path",
+        type=str,
+        default="../data/processed/",
+        help="Path to the dataset",
+    )
+    parser.add_argument(
+        "-b", "--batch_size", type=int, default=16, help="Input batch size for training"
+    )
+    parser.add_argument(
+        "-e", "--epochs", type=int, default=100, help="Number of epochs to train"
+    )
+    parser.add_argument("-o", "--output", type=str, help="Model performance output")
+    parser.add_argument(
+        "-lr", "--learning_rate", type=float, default=0.0001, help="Learning rate"
+    )
+    parser.add_argument(
+        "--device",
+        type=str,
+        default="cuda" if torch.cuda.is_available() else "cpu",
+        help="Device to use for training",
+    )
+    parser.add_argument(
+        "--save_model", action="store_true", help="For Saving the current Model"
+    )
+    parser.add_argument("-w", "--weight_path")
+    parser.add_argument(
+        "-l",
+        "--load_model",
+        action="store_true",
+        help="Load previously trained weights",
+    )
+    parser.add_argument("--epoch_start", type=int, default=1)
+
+    parser.set_defaults(func=main)
+    return parser
 
 
 def check_pdb_ids(a: str, b: str) -> bool:
@@ -213,41 +251,7 @@ def main(args):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Training Script")
-    parser.add_argument(
-        "-d",
-        "--data_path",
-        type=str,
-        default="../data/processed/",
-        help="Path to the dataset",
-    )
-    parser.add_argument(
-        "-b", "--batch_size", type=int, default=16, help="Input batch size for training"
-    )
-    parser.add_argument(
-        "-e", "--epochs", type=int, default=100, help="Number of epochs to train"
-    )
-    parser.add_argument("-o", "--output", type=str, help="Model performance output")
-    parser.add_argument(
-        "-lr", "--learning_rate", type=float, default=0.0001, help="Learning rate"
-    )
-    parser.add_argument(
-        "--device",
-        type=str,
-        default="cuda" if torch.cuda.is_available() else "cpu",
-        help="Device to use for training",
-    )
-    parser.add_argument(
-        "--save_model", action="store_true", help="For Saving the current Model"
-    )
-    parser.add_argument("-w", "--weight_path")
-    parser.add_argument(
-        "-l",
-        "--load_model",
-        action="store_true",
-        help="Load previously trained weights",
-    )
-    parser.add_argument("--epoch_start", type=int, default=1)
-
+    parser = argparse.ArgumentParser(description="Evaluation tool")
+    add_arguments(parser)
     args = parser.parse_args()
-    main(args)
+    args.func(args)

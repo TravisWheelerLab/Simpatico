@@ -10,15 +10,22 @@ software? Is it a component of or extension to a larger piece of software?
 
 ## Installation
 
-**REPLACE:** How does on install the software? What are the dependencies, if any? Is there a
-Docker image or installation package of some sort?
+I did not need a day!
+git clone git@github.com:TravisWheelerLab/Simpatico.git
+pip install Simpatico
 
 ## Usage
 
-**REPLACE:** How is the software run (or consumed, for libraries)? Are there any command line
-flags the user should know about? What do they do, exactly? What do the input
-data look like? Are there special file formats in use, what are they? What does
-the output look like?
+### Generating PyG Graphs
+Before we can perform training, we will need to get the structural data of the proteins and small molecules into convenient PyG 
+
+### Training
+
+
+### Evaluation
+
+
+
 
 ## Development
 

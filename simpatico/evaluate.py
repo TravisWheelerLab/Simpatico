@@ -74,7 +74,7 @@ def add_arguments(parser):
         help=".txt, .mol2, .sdf, or .pdb describing coordinates of protein pocket. Overrides inline pocket specification.",
     )
 
-    parser.set_defaults(func=main)
+    parser.set_defaults(main=main)
     return parser
 
 

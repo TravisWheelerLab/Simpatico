@@ -1,6 +1,5 @@
 # setup.py
 from setuptools import setup
-from simpatico import config
 
 setup(
     name="simpatico",

@@ -1,8 +1,10 @@
 import torch
+from os import path
 import re
 import argparse
 from torch_geometric.utils import k_hop_subgraph, to_undirected
 from typing import List, Tuple, Optional
+from simpatico import config
 
 
 def to_onehot(value: any, vocabulary: List[any]) -> List[int]:
@@ -109,14 +111,6 @@ def get_mol2_coords(input_file):
                 coord_list.append(xyz)
 
     return torch.tensor(coord_list)
-
-
-def get_xyz_from_file(input_file):
-    filetype = input_file.split(".")[-1]
-    if filetype == "mol2":
-        xyz_coords = get_mol2_coords(input_file)
-
-    return xyz_coords
 
 
 class SmartFormatter(argparse.HelpFormatter):

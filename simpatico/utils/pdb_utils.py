@@ -42,7 +42,7 @@ def get_pdb_line_data(line: str) -> Tuple[List[float], List[float]]:
     return onehot, pos
 
 
-def pdb2pyg(pdb_path: str, ligand_pos=None) -> Data:
+def pdb2pyg(pdb_path: str, ligand_pos=None, pocket_coords=None) -> Data:
     """
     Converts PDB file to PyG graph
     Args:
@@ -76,5 +76,16 @@ def pdb2pyg(pdb_path: str, ligand_pos=None) -> Data:
         proximal_atoms = radius(ligand_pos, g.pos, 12.5)[0].unique()
         g.x = g.x[proximal_atoms]
         g.pos = g.pos[proximal_atoms]
+
+    if pocket_coords is not None:
+        pocket_mask = torch.zeros(len(g.x)).bool()
+
+        close_enough = radius(pocket_coords, g.pos, 5)[0].unique()
+        pocket_mask[close_enough] = True
+
+        too_close = radius(pocket_coords, g.pos, 2)[0].unique()
+        pocket_mask[too_close] = False
+
+        g.pocket_mask = pocket_mask
 
     return g

@@ -74,13 +74,68 @@ def hard_negative_scheduler(target_epoch, target_difficulty):
 
 def logger(output_path):
     def log_text(message):
-        if output_path is not none:
+        if output_path is not None:
             with open(output_path, "a") as f_out:
                 f_out.write(f"{message}\n")
         else:
             print(message)
 
     return log_text
+
+
+def training_step(
+    data_loader, protein_encoder, mol_encoder, difficulty_value, prot_loss=True
+):
+    device = next(protein_encoder.parameters()).device
+
+    protein_batch, molecule_batch = data_loader.get_random_batch()
+    protein_batch = protein_batch.clone()
+    protein_batch.pos += torch.randn_like(protein_batch.pos) * 0.25
+
+    protein_batch = protein_batch.to(device)
+    molecule_batch = molecule_batch.to(device)
+
+    protein_out = protein_encoder(protein_batch)
+    mol_out = mol_encoder(molecule_batch)
+
+    output_handler = TrainingOutputHandler(
+        *protein_out,
+        mol_out,
+        molecule_batch.pos,
+        molecule_batch.batch,
+    )
+
+    if prot_loss:
+        anchor_samples, positive_samples, negative_samples = (
+            output_handler.get_protein_anchor_pairs(difficulty=difficulty_value)
+        )
+    else:
+        anchor_samples, positive_samples, negative_samples = (
+            output_handler.get_mol_anchor_pairs(difficulty=difficulty_value)
+        )
+
+    loss = positive_margin_loss(anchor_samples, positive_samples, negative_samples)
+    return loss
+
+
+def validate(
+    data_loader, protein_encoder, mol_encoder, difficulty_value, batch_size=16
+):
+    validation_loss_vals = []
+
+    for prot_loss in [True, False]:
+        for batch_idx in range(data_loader.size // batch_size):
+            with torch.no_grad():
+                loss = training_step(
+                    data_loader,
+                    protein_encoder,
+                    mol_encoder,
+                    difficulty_value,
+                    prot_loss,
+                )
+                validation_loss_vals.append(loss)
+
+    return sum(validation_loss_vals) / len(validation_loss_vals)
 
 
 def main(args):
@@ -123,46 +178,24 @@ def main(args):
 
     get_hard_negative_difficulty = hard_negative_scheduler(50, 0.05)
     prot_loss = True
+    best_validation_score = None
 
     for epoch in range(args.epoch_start, args.epochs + 1):
         difficulty_value = get_hard_negative_difficulty(epoch)
+
+        if best_validation_score is None:
+            best_validation_score = validate(
+                validation_loader, protein_encoder, mol_encoder, difficulty_value
+            )
+
         log_message = f"Epoch {epoch} difficulty: {difficulty_value}"
         log_text(log_message)
-
         loss_vals = []
 
         for batch_idx in range(train_loader.size // args.batch_size):
             prot_loss = not prot_loss
-
-            protein_batch, molecule_batch = train_loader.get_random_batch()
-
-            protein_batch = protein_batch.clone()
-            protein_batch.pos += torch.randn_like(protein_batch.pos) * 0.25
-
-            protein_batch = protein_batch.to(device)
-            molecule_batch = molecule_batch.to(device)
-
-            protein_out = protein_encoder(protein_batch)
-            mol_out = mol_encoder(molecule_batch)
-
-            output_handler = TrainingOutputHandler(
-                *protein_out,
-                mol_out,
-                molecule_batch.pos,
-                molecule_batch.batch,
-            )
-
-            if prot_loss:
-                anchor_samples, positive_samples, negative_samples = (
-                    output_handler.get_protein_anchor_pairs(difficulty=difficulty_value)
-                )
-            else:
-                anchor_samples, positive_samples, negative_samples = (
-                    output_handler.get_mol_anchor_pairs(difficulty=difficulty_value)
-                )
-
-            loss = positive_margin_loss(
-                anchor_samples, positive_samples, negative_samples
+            loss = training_step(
+                train_loader, protein_encoder, mol_encoder, difficulty_value, prot_loss
             )
 
             loss_vals.append(loss)
@@ -179,21 +212,19 @@ def main(args):
                 optimizer.zero_grad()
                 torch.cuda.empty_cache()
 
-        epoch_validation_score, _ = validate(
-            protein_encoder,
-            mol_encoder,
-            validation_loader,
-            device,
+        epoch_validation_score = validate(
+            validation_loader, protein_encoder, mol_encoder, difficulty_value
         )
 
         log_text(f"Epoch {epoch} validation: {epoch_validation_score}")
 
-        torch.save(
-            [protein_encoder.state_dict(), mol_encoder.state_dict()],
-            args.weight_path,
-        )
+        if epoch_validation_score > best_validation_score:
+            torch.save(
+                [protein_encoder.state_dict(), mol_encoder.state_dict()],
+                args.weight_path,
+            )
 
-        log_text(f"Weights updated")
+            log_text(f"Weights updated")
 
 
 if __name__ == "__main__":

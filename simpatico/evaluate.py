@@ -1,5 +1,6 @@
 # scripts/train.py
 import os
+from os import path
 from pathlib import Path
 import sys
 import argparse
@@ -8,7 +9,7 @@ from typing import List, Tuple, Optional
 from torch_geometric.data import Data, Batch
 from torch_geometric.loader import DataLoader
 from torch_geometric.nn import radius
-from simpatico.utils.mol_utils import molfile2pyg
+from simpatico.utils.mol_utils import molfile2pyg, get_xyz_from_file
 
 from simpatico.utils.data_utils import (
     ProteinLigandDataLoader,
@@ -19,7 +20,6 @@ from simpatico.models.protein_encoder.ProteinEncoder import ProteinEncoder
 from simpatico.models import MolEncoderDefaults, ProteinEncoderDefaults
 from simpatico.utils.pdb_utils import pdb2pyg
 from simpatico.utils.utils import SmartFormatter
-from simpatico.utils.utils import get_xyz_from_file
 
 from typing import Callable
 from glob import glob
@@ -55,24 +55,24 @@ def add_arguments(parser):
         help="Indicates molecule evaluation.",
     )
     parser.add_argument(
+        "-g",
+        "--graph-in",
+        action="store_true",
+        help="Indicates input file is PyG graph",
+    )
+    parser.add_argument(
         "--device",
         type=str,
         default="cuda" if torch.cuda.is_available() else "cpu",
         help="Device to use for training",
     )
     parser.add_argument(
-        "-c",
-        "--center",
-        type=str,
-        help="Protein pocket center coordinates in the form X,Y,Z e.g '-c 20.3,-12,10.25",
-    )
-    parser.add_argument("-r", "--radius", type=float, help="Protein pocket radius")
-    parser.add_argument(
-        "--pocket-coords",
+        "--pocket-coordinates",
         type=str,
         default=None,
-        help=".txt, .mol2, .sdf, or .pdb describing coordinates of protein pocket. Overrides inline pocket specification.",
+        help="File describing pocket coordinates (.csv or any compatible small-molecule file)",
     )
+    parser.add_argument("--suffix", type=str, default="")
 
     parser.set_defaults(main=main)
     return parser
@@ -97,34 +97,37 @@ def main(args):
 
     encoder.eval()
     input_file = args.input_path
-    input_filetype = input_file.split(".")[-1]
+    _, input_filetype = path.splitext(args.input_path)
 
     input_list = []
-    pocket_spec_list = []
 
-    if input_filetype in ["txt", "csv"]:
+    if input_filetype in [".txt", ".csv"]:
         with open(input_file, "r") as input_in:
             for line in input_in:
-                line_content = line.split(",")
-                input_list.append(line_content[0].strip())
-
-                if len(line_content) > 1:
-                    pocket_spec_list.append(line_content[1].strip())
+                line_content = [x.strip() for x in line.split(",")]
+                input_list.append(line_content)
     else:
-        input_list = [input_file]
+        input_list = [[input_file, None]]
 
-    for file_i, structure_file in enumerate(input_list):
-        pocket_spec = None
+    for file_i, structure_data in enumerate(input_list):
+        structure_file, pocket_data = structure_data
+        structure_file_basename, structure_filetype = path.splitext(
+            path.basename(structure_file)
+        )
 
-        if len(pocket_spec_list) > file_i:
-            pocket_spec = get_xyz_from_file(pocket_spec_list[file_i])
+        if args.protein:
+            pocket_spec_file = pocket_data or args.pocket_coordinates
+            pocket_spec = get_xyz_from_file(pocket_spec_file)
 
         embed_failed = False
+
+        output_path = args.output_path
+
+        if output_path[-1] != "/":
+            output_path += "/"
+
         outfile = (
-            args.output_path
-            + "/"
-            + structure_file.split("/")[-1].split(".")[0]
-            + "_embeds.pyg"
+            output_path + structure_file_basename + "_embeds" + args.suffix + ".pyg"
         )
 
         if args.no_overwrite:
@@ -134,14 +137,12 @@ def main(args):
                 # create an empty file so parallel jobs know to skip current target
                 Path(outfile).touch()
 
-        structure_filetype = structure_file.split(".")[-1]
-
-        if structure_filetype == "pdb":
-            input_g = pdb2pyg(structure_file, pocket_spec)
-        elif structure_filetype in ["sdf", "ism", "smi"]:
-            input_g = molfile2pyg(structure_file, get_pos=True)
-        else:
+        if args.graph_in:
             input_g = torch.load(structure_file)
+        elif args.protein:
+            input_g = pdb2pyg(structure_file, pocket_coords=pocket_spec)
+        elif args.molecule:
+            input_g = molfile2pyg(structure_file, get_pos=True)
 
         if args.protein:
             input_g = Batch.from_data_list([input_g])

@@ -1,5 +1,5 @@
 import argparse
-from simpatico import train, evaluate, convert, get_train_set
+from simpatico import train, evaluate, convert, get_train_set, query
 from simpatico.utils.utils import SmartFormatter
 
 
@@ -29,6 +29,12 @@ def main():
         help="Converts protein and molecule files into PyG graphs and consolidates in train-validation set.",
     )
     get_train_set.add_arguments(get_train_set_parser)
+
+    query_parser = subparsers.add_parser(
+        "query",
+        help="Query a database of Simpatico embeddings",
+    )
+    query.add_arguments(query_parser)
 
     args = parser.parse_args()
     # run main function from correct script

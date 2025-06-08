@@ -10,4 +10,5 @@ setup(
             "simpatico = simpatico.cli:main",
         ],
     },
+    include_package_data=True,
 )

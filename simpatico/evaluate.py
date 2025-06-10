@@ -20,6 +20,7 @@ from simpatico.models.protein_encoder.ProteinEncoder import ProteinEncoder
 from simpatico.models import MolEncoderDefaults, ProteinEncoderDefaults
 from simpatico.utils.pdb_utils import pdb2pyg
 from simpatico.utils.utils import SmartFormatter
+from simpatico import config
 
 from typing import Callable
 from glob import glob
@@ -27,8 +28,7 @@ from glob import glob
 
 def add_arguments(parser):
     parser.add_argument(
-        "-i",
-        "--input_path",
+        "input_file",
         type=str,
         help="R|Path to input file.\n"
         "- Protein: .pdb file\n"
@@ -36,8 +36,8 @@ def add_arguments(parser):
         "- Batch: .txt file with one path per line\n"
         "  * For proteins: each line = .pdb path, pocket spec (comma-separated)",
     )
-    parser.add_argument("-w", "--weight_location")
-    parser.add_argument("-o", "--output_path")
+    parser.add_argument("output_path")
+    parser.add_argument("-w", "--weights-file", default=config["default_weights_path"])
     parser.add_argument(
         "--no-overwrite", action="store_true", help="Do not overwrite existing files"
     )
@@ -81,10 +81,10 @@ def add_arguments(parser):
 def main(args):
     device = args.device
 
+    # Weights for protein and ligand models are stored in one file.
+    # first item is protein model weights, second is molecule model weights
     if args.protein:
         encoder = ProteinEncoder(**ProteinEncoderDefaults).to(device)
-        # Weights for protein and ligand models are stored in one file.
-        # first item is protein model weights, second is molecule model weights
         weight_index = 0
 
     elif args.molecule:
@@ -92,12 +92,12 @@ def main(args):
         weight_index = 1
 
     encoder.load_state_dict(
-        torch.load(args.weight_location, map_location=device)[weight_index]
+        torch.load(args.weights_file, map_location=device)[weight_index]
     )
 
     encoder.eval()
-    input_file = args.input_path
-    _, input_filetype = path.splitext(args.input_path)
+    input_file = args.input_file
+    _, input_filetype = path.splitext(args.input_file)
 
     input_list = []
 
@@ -110,7 +110,11 @@ def main(args):
         input_list = [[input_file, None]]
 
     for file_i, structure_data in enumerate(input_list):
-        structure_file, pocket_data = structure_data
+        structure_file = structure_data[0]
+
+        if len(structure_data) > 1:
+            pocket_data = structure_data[1]
+
         structure_file_basename, structure_filetype = path.splitext(
             path.basename(structure_file)
         )
@@ -120,8 +124,9 @@ def main(args):
             pocket_spec = get_xyz_from_file(pocket_spec_file)
 
         embed_failed = False
-
         output_path = args.output_path
+
+        Path(output_path).mkdir(parents=True, exist_ok=True)
 
         if output_path[-1] != "/":
             output_path += "/"

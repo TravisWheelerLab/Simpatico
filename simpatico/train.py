@@ -15,19 +15,18 @@ from typing import Callable
 
 def add_arguments(parser):
     parser.add_argument(
-        "-i",
-        "--input_data",
+        "input_data",
         type=str,
-        default="../data/processed/",
-        help="Path to the dataset",
+        help="Path to train-eval dataset",
     )
+    parser.add_argument("weight_path"),
+    parser.add_argument("-o", "--output", type=str, help="Model performance output")
     parser.add_argument(
         "-b", "--batch_size", type=int, default=16, help="Input batch size for training"
     )
     parser.add_argument(
         "-e", "--epochs", type=int, default=100, help="Number of epochs to train"
     )
-    parser.add_argument("-o", "--output", type=str, help="Model performance output")
     parser.add_argument(
         "-lr", "--learning_rate", type=float, default=0.0001, help="Learning rate"
     )
@@ -37,10 +36,6 @@ def add_arguments(parser):
         default="cuda" if torch.cuda.is_available() else "cpu",
         help="Device to use for training",
     )
-    parser.add_argument(
-        "--save_model", action="store_true", help="For Saving the current Model"
-    )
-    parser.add_argument("-w", "--weight_path")
     parser.add_argument(
         "-l",
         "--load_model",

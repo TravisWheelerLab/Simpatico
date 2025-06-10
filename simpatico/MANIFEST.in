@@ -1,1 +1,1 @@
-include simpatico/data/config.json
+recursive-include simpatico *.json *.pt

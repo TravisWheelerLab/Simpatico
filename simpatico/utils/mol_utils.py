@@ -267,7 +267,7 @@ def mol2pyg(
         mol_graph.pos = pos
 
     if source_idx is not None:
-        mol_graph.source_idx = torch.zeros(len(mol_graph.x)).fill_(source_idx)
+        mol_graph.source_idx = torch.zeros(len(mol_graph.x)).fill_(source_idx).long()
 
     return mol_graph
 
@@ -291,7 +291,6 @@ def molfile2pyg(
     # Extract the filename and filetype from the input file path
     filename, filetype = os.path.splitext(m_file)
     filetype = filetype[1:]
-    # filename, filetype = m_file.split("/")[-1].split(".")
     ignore_pos = False
 
     # Use appropriate RDKit method for generating Molecule object from file
@@ -341,4 +340,6 @@ def molfile2pyg(
         return None
 
     # Create a batch of PyG Data objects
-    return Batch.from_data_list(mol_batch)
+    pyg_batch = Batch.from_data_list(mol_batch)
+    pyg_batch.source = m_file
+    return pyg_batch

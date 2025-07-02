@@ -70,7 +70,12 @@ def pdb2pyg(pdb_path: str, ligand_pos=None, pocket_coords=None) -> Data:
                     graph_x.append(x)
                     graph_pos.append(pos)
 
-    g = Data(x=torch.tensor(graph_x), pos=torch.tensor(graph_pos), name=pdb_name)
+    g = Data(
+        x=torch.tensor(graph_x),
+        pos=torch.tensor(graph_pos),
+        name=pdb_name,
+        source=pdb_path,
+    )
 
     if ligand_pos is not None:
         proximal_atoms = radius(ligand_pos, g.pos, 12.5)[0].unique()

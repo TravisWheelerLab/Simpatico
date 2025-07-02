@@ -149,6 +149,11 @@ def main(args):
         elif args.molecule:
             input_g = molfile2pyg(structure_file, get_pos=True)
 
+        graph_source = None
+
+        if hasattr(input_g, "source"):
+            graph_source = input_g.source
+
         if args.protein:
             input_g = Batch.from_data_list([input_g])
 
@@ -186,6 +191,10 @@ def main(args):
             continue
 
         embeds_out = Batch.from_data_list(data_out)
+
+        if graph_source:
+            embeds_out.source = graph_source
+
         torch.save(embeds_out, outfile)
         print(outfile)
 

@@ -7,6 +7,36 @@ from simpatico.utils import graph_utils
 from simpatico.utils.utils import get_k_hop_edges
 
 
+def report_results(queries, vector_db, results):
+    target_list = ">target sources:\n"
+    db_list = ">db sources:\n"
+    results_content = ">results:\n"
+
+    for t_i, file_string in enumerate(queries["sources"]):
+        target_list += f"{t_i} {file_string}\n"
+
+    for d_i, file_string in enumerate(vector_db["sources"]):
+        db_list += f"{d_i} {file_string}\n"
+
+    for qi, result_vals in enumerate(results):
+        q_item_index = queries["item_batch"] == qi
+        q_source_idx = queries["file_batch"][q_item_index][0].item()
+        q_source_item_idx = queries["source_index"][q_item_index][0].item()
+        query_source = queries["sources"][q_source_idx]
+
+        for result_idx in result_vals[1]:
+            r_idx = result_idx.item()
+            r_item_index = vector_db["item_batch"] == r_idx
+            r_source_idx = vector_db["file_batch"][r_item_index][0].item()
+            r_source_item_idx = vector_db["source_index"][r_item_index][0].item()
+
+            r_source = vector_db["sources"][r_source_idx]
+            results_content += f"{q_source_idx} {q_source_item_idx} {r_source_idx} {r_source_item_idx}\n"
+
+    output = target_list + db_list + results_content
+    print(output)
+
+
 class ProteinLigandDataLoader:
     def __init__(self, pl_graph_pairs: List[Data], batch_size: int):
 

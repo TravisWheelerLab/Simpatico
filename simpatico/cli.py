@@ -1,5 +1,5 @@
 import argparse
-from simpatico import train, evaluate, convert, get_train_set, query
+from simpatico import train, evaluate, convert, get_train_set, query, print_results
 from simpatico.utils.utils import SmartFormatter
 
 
@@ -35,6 +35,11 @@ def main():
         help="Query a database of Simpatico embeddings",
     )
     query.add_arguments(query_parser)
+
+    print_results_parser = subparsers.add_parser(
+        "print-results", help="Print results from a vector database search"
+    )
+    print_results.add_arguments(print_results_parser)
 
     args = parser.parse_args()
     # run main function from correct script

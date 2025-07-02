@@ -16,6 +16,7 @@ from simpatico.utils.mol_utils import molfile2pyg, get_xyz_from_file
 from simpatico.utils.data_utils import (
     ProteinLigandDataLoader,
     TrainingOutputHandler,
+    report_results,
 )
 from simpatico.models.molecule_encoder.MolEncoder import MolEncoder
 from simpatico.models.protein_encoder.ProteinEncoder import ProteinEncoder
@@ -28,14 +29,15 @@ from glob import glob
 
 
 def add_arguments(parser):
-    parser.add_argument("-i", "--input_file", type=str, help="R|Path to input file.\n")
-    parser.add_argument("-o", "--output_file", type=str, help="File for results")
+    parser.add_argument("input_file", type=str, help="R|Path to input file.\n")
+    parser.add_argument("output_file", type=str, help="File for results")
     parser.add_argument(
         "--device",
         type=str,
         default="cuda" if torch.cuda.is_available() else "cpu",
         help="Device to use for training",
     )
+    parser.add_argument("-o", "--print-output", action="store_true")
     parser.set_defaults(main=main)
     return parser
 
@@ -64,19 +66,19 @@ class VectorDatabase:
 
         for ef_i, embed_file in enumerate(embed_files):
             g = torch.load(embed_file, weights_only=False)
-            self.sources.append(embed_file)
+
+            self.sources.append(g.source)
             vectors.append(g.x)
 
             batch_modifier = item_batch[-1][-1] + 1 if len(item_batch) else 0
 
             item_batch.append(g.batch + batch_modifier)
-            file_batch.append(torch.zeros(len(g.x)).fill_(ef_i))
+            file_batch.append(torch.zeros(len(g.x), dtype=torch.long).fill_(ef_i))
 
             if hasattr(g, "source_idx") and g.source_idx is not None:
                 source_index.append(g.source_idx)
             else:
-                if len(source_index) != 0:
-                    source_index.append(torch.ones(len(g.x)) * -1)
+                source_index.append(torch.zeros(len(g.x), dtype=torch.long))
 
         self.vectors = torch.vstack(vectors)
         self.item_batch = torch.hstack(item_batch)
@@ -176,9 +178,6 @@ class VectorDatabase:
 
     def search(self, query_db):
         queries = query_db.np_vectors()
-        score_thresholds = query_db.score_thresholds or query_db.get_score_thresholds(
-            self
-        )
         faiss_index = self.faiss_index()
 
         D, I = faiss_index.search(queries, 2048)
@@ -216,4 +215,11 @@ def main(args):
     vector_db.initialize(db_files)
 
     queries.get_score_thresholds(vector_db)
-    print(vector_db.search(queries))
+
+    search_results = vector_db.search(queries)
+
+    output_data = [vars(queries), vars(vector_db), search_results]
+    pickle.dump(output_data, open(args.output_file, "wb"))
+
+    if args.print_output:
+        report_results(*output_data)

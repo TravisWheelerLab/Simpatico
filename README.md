@@ -106,7 +106,9 @@ For each specified molecular structure, a .pyg file representing a [batch of gra
 </details>
 <details closed>
 <summary><strong>Querying the vector database</strong></summary>
+In the [simpatico paper](https://www.biorxiv.org/content/10.1101/2025.06.08.658499v1), we perform virtual screening by using protein pocket embeddings to query a Faiss vector database of small molecular embeddings, then performing a simple aggreagation procedure over the queries' nearest neighbors. 
 
+To perform this operation, you'll need a .csv which embedding (.pyg) files will serve as  
 </details>
 
 ## Training

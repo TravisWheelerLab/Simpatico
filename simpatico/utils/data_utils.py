@@ -13,12 +13,13 @@ def report_results(queries, vector_db, results):
     results_content = ">results:\n"
 
     for t_i, file_string in enumerate(queries["sources"]):
-        target_list += f"{t_i} {file_string}\n"
+        target_list += f"{t_i+1} {file_string}\n"
 
     for d_i, file_string in enumerate(vector_db["sources"]):
-        db_list += f"{d_i} {file_string}\n"
+        db_list += f"{d_i+1} {file_string}\n"
 
     for qi, result_vals in enumerate(results):
+        rank = 1
         q_item_index = queries["item_batch"] == qi
         q_source_idx = queries["file_batch"][q_item_index][0].item()
         q_source_item_idx = queries["source_index"][q_item_index][0].item()
@@ -31,7 +32,8 @@ def report_results(queries, vector_db, results):
             r_source_item_idx = vector_db["source_index"][r_item_index][0].item()
 
             r_source = vector_db["sources"][r_source_idx]
-            results_content += f"{q_source_idx} {q_source_item_idx} {r_source_idx} {r_source_item_idx}\n"
+            results_content += f"{q_source_idx+1} {q_source_item_idx+1} {r_source_idx+1} {r_source_item_idx+1} {rank}\n"
+            rank += 1
 
     output = target_list + db_list + results_content
     print(output)

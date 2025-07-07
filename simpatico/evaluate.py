@@ -196,7 +196,7 @@ def main(args):
             embeds_out.source = graph_source
 
         torch.save(embeds_out, outfile)
-        print(outfile)
+        print("completed:", outfile)
 
 
 if __name__ == "__main__":

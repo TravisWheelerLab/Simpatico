@@ -8,6 +8,7 @@ import numpy as np
 from torch_geometric.data import Data
 from rdkit import Chem
 from rdkit.Chem import AllChem, AddHs
+from rdkit import RDLogger
 from torch_geometric.utils import subgraph, to_undirected
 from torch_geometric.data import Batch
 from rdkit.Chem.rdchem import Mol
@@ -174,6 +175,7 @@ def mol2pyg(
         Optional[Data]: PyG Data object containing the graph representation of the molecule, or None if conversion fails.
     """
     standardizer = Standardizer()
+    RDLogger.DisableLog("rdApp.*")
 
     # If we cannot standardize molecule, we won't be able to extract the scaffold
     try:

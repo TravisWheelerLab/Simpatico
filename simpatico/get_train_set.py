@@ -36,8 +36,8 @@ def gather_structure_files(input_string):
     return line_data
 
 
-def main(args):
-    structure_data = gather_structure_files(args.input)
+def construct_tv_set(input_string):
+    structure_data = gather_structure_files(input_string)
 
     train_pairs = []
     validation_pairs = []
@@ -54,5 +54,11 @@ def main(args):
         elif split == "v":
             validation_pairs.append((protein_graph, ligand_graph))
 
+    return (train_pairs, validation_pairs)
+
+
+def main(args):
+    tv_set = construct_tv_set(args.input)
+
     with open(args.output_file, "wb") as tv_set_out:
-        pickle.dump((train_pairs, validation_pairs), tv_set_out)
+        pickle.dump(tv_set, tv_set_out)

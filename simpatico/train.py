@@ -1,4 +1,5 @@
 import sys
+from os import path
 import pickle
 import argparse
 import torch
@@ -9,13 +10,14 @@ from simpatico.utils.data_utils import (
 )
 from simpatico.models.molecule_encoder.MolEncoder import MolEncoder
 from simpatico.models.protein_encoder.ProteinEncoder import ProteinEncoder
+from simpatico.get_train_set import construct_tv_set
 from simpatico.models import MolEncoderDefaults, ProteinEncoderDefaults
 from typing import Callable
 
 
 def add_arguments(parser):
     parser.add_argument(
-        "input_data",
+        "input",
         type=str,
         help="Path to train-eval dataset",
     )
@@ -39,7 +41,6 @@ def add_arguments(parser):
     parser.add_argument(
         "-l",
         "--load_model",
-        action="store_true",
         help="Load previously trained weights",
     )
     parser.add_argument("--epoch_start", type=int, default=1)
@@ -137,8 +138,15 @@ def main(args):
     device = args.device
     log_text = logger(args.output)
     # Load data
-    with open(args.input_data, "rb") as train_validate_data:
-        train_data, validation_data = pickle.load(train_validate_data)
+
+    _, input_filetype = path.splitext(args.input)
+
+    if input_filetype == ".pkl":
+        with open(args.input, "rb") as train_validate_data:
+            train_data, validation_data = pickle.load(train_validate_data)
+
+    elif input_filetype == ".csv":
+        train_data, validation_data = construct_tv_set(args.input)
 
     if args.output is not None:
         with open(args.output, "w"):
@@ -153,18 +161,18 @@ def main(args):
     mol_encoder = MolEncoder(**MolEncoderDefaults).to(device)
 
     if args.load_model:
-        protein_model_weights, mol_model_weights = torch.load(args.weight_path)
+        protein_model_weights, mol_model_weights = torch.load(args.load_model)
 
         protein_encoder.load_state_dict(protein_model_weights)
         mol_encoder.load_state_dict(mol_model_weights)
 
-        initial_validation_score, _ = validate(
+        initial_validation_loss, _ = validate(
             protein_encoder,
             mol_encoder,
             validation_loader,
             device,
         )
-        log_text(f"Best validation score: {initial_validation_score}")
+        log_text(f"Best validation score: {initial_validation_loss}")
 
     optimizer = torch.optim.AdamW(
         list(protein_encoder.parameters()) + list(mol_encoder.parameters()),
@@ -173,13 +181,13 @@ def main(args):
 
     get_hard_negative_difficulty = hard_negative_scheduler(50, 0.05)
     prot_loss = True
-    best_validation_score = None
+    best_validation_loss = None
 
     for epoch in range(args.epoch_start, args.epochs + 1):
         difficulty_value = get_hard_negative_difficulty(epoch)
 
-        if best_validation_score is None:
-            best_validation_score = validate(
+        if best_validation_loss is None:
+            best_validation_loss = validate(
                 validation_loader, protein_encoder, mol_encoder, difficulty_value
             )
 
@@ -207,13 +215,13 @@ def main(args):
                 optimizer.zero_grad()
                 torch.cuda.empty_cache()
 
-        epoch_validation_score = validate(
+        epoch_validation_loss = validate(
             validation_loader, protein_encoder, mol_encoder, difficulty_value
         )
 
-        log_text(f"Epoch {epoch} validation: {epoch_validation_score}")
+        log_text(f"Epoch {epoch} validation: {epoch_validation_loss}")
 
-        if epoch_validation_score > best_validation_score:
+        if epoch_validation_loss < best_validation_loss:
             torch.save(
                 [protein_encoder.state_dict(), mol_encoder.state_dict()],
                 args.weight_path,
@@ -223,7 +231,7 @@ def main(args):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Evaluation tool")
+    parser = argparse.ArgumentParser(description="Train")
     add_arguments(parser)
     args = parser.parse_args()
     args.func(args)

@@ -8,7 +8,7 @@ from simpatico.utils.utils import get_k_hop_edges
 
 
 def report_results(queries, vector_db, results):
-    target_list = ">target sources:\n"
+    target_list = ">query sources:\n"
     db_list = ">db sources:\n"
     results_content = ">results:\n"
 

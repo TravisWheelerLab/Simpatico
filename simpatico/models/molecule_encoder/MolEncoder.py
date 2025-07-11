@@ -4,8 +4,9 @@ from torch_geometric.nn import (
     GATv2Conv,
     Sequential as PyG_Sequential,
 )
-from torch.nn import Sequential
+from torch.nn import Sequential, Linear, ModuleList, SiLU
 from typing import Optional
+from simpatico.models import MolEncoderDefaults
 
 
 class MolEncoder(torch.nn.Module):
@@ -33,19 +34,19 @@ class MolEncoder(torch.nn.Module):
 
     def __init__(
         self,
-        feature_dim,
-        hidden_dim,
-        out_dim,
-        heads=4,
-        blocks=6,
-        block_depth=2,
-        edge_dim: Optional[int] = None,
+        feature_dim: int = MolEncoderDefaults["feature_dim"],
+        hidden_dim: int = MolEncoderDefaults["hidden_dim"],
+        out_dim: int = MolEncoderDefaults["out_dim"],
+        heads: int = 4,
+        blocks: int = 6,
+        block_depth: int = 2,
+        edge_dim: Optional[int] = MolEncoderDefaults["edge_dim"],
         **kwargs
     ):
         super().__init__()
-        self.input_projection_layer = torch.nn.Linear(feature_dim, hidden_dim * heads)
+        self.input_projection_layer = Linear(feature_dim, hidden_dim * heads)
 
-        self.residual_blocks = torch.nn.ModuleList(
+        self.residual_blocks = ModuleList(
             [
                 ResBlock(hidden_dim, heads, block_depth, edge_dim=edge_dim)
                 for _ in range(blocks)
@@ -53,9 +54,9 @@ class MolEncoder(torch.nn.Module):
         )
 
         self.output_projection_layer = Sequential(
-            torch.nn.Linear((blocks + 1) * hidden_dim * heads, hidden_dim * heads),
-            torch.nn.SiLU(),
-            torch.nn.Linear(hidden_dim * heads, out_dim),
+            Linear((blocks + 1) * hidden_dim * heads, hidden_dim * heads),
+            SiLU(),
+            Linear(hidden_dim * heads, out_dim),
         )
 
     def forward(self, data):

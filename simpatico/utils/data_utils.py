@@ -1,10 +1,26 @@
 from typing import List, Optional, Callable, Tuple
 import sys
+import os
 from torch_geometric.data import Batch, Data
 from torch_geometric.nn import radius, knn
 import torch
 from simpatico.utils import graph_utils
 from simpatico.utils.utils import get_k_hop_edges
+from pathlib import Path
+
+
+def handle_no_overwrite(outfile):
+    """
+    check if output exists or is being generated.
+    returns False if we should skip the file, otherwise True
+    input: output file path
+    output: bool
+    """
+    if os.path.exists(outfile) and os.path.getsize(outfile) > 0:
+        return False
+    else:
+        Path(outfile).touch()
+        return True
 
 
 def report_results(queries, vector_db, results):

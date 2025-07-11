@@ -142,6 +142,11 @@ def get_H_counts(
 
 
 def get_xyz_from_file(input_file):
+    """
+    generates a tensor of x,y,z coordinate values from molecular structure  or .csv file
+    input: path to file (.csv, .txt, .mol2, .sdf)
+    output: float-valued tensor of shape (N,3)
+    """
     _, filetype = path.splitext(input_file)
 
     if filetype in config["molecule_filetypes"]:
@@ -276,7 +281,6 @@ def mol2pyg(
 
 def molfile2pyg(
     m_file: str,
-    get_pos: bool = True,
     k: int = 3,
     get_scaffold: bool = False,
     coords_only=False,
@@ -292,21 +296,20 @@ def molfile2pyg(
     """
     # Extract the filename and filetype from the input file path
     filename, filetype = os.path.splitext(m_file)
-    filetype = filetype[1:]
     ignore_pos = False
 
     # Use appropriate RDKit method for generating Molecule object from file
-    if filetype == "sdf":
+    if filetype == ".sdf":
         mols = Chem.SDMolSupplier(m_file, sanitize=False)
 
-    elif filetype == "pdb":
+    elif filetype == ".pdb":
         mols = [Chem.MolFromPDBFile(m_file, sanitize=False)]
 
-    elif filetype in ["ism", "smi", "cxsmiles"]:
+    elif filetype in [".ism", ".smi", ".cxsmiles"]:
         mols = Chem.SmilesMolSupplier(m_file, sanitize=False)
         ignore_pos = True
 
-    elif filetype == "mol2":
+    elif filetype == ".mol2":
         mols = [Chem.MolFromMol2File(m_file, sanitize=False)]
 
     # List to store individual PyG graph objects

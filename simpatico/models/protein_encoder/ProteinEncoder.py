@@ -1,5 +1,6 @@
 import torch
 from simpatico.utils.model_utils import ResBlock, PositionalEdgeGenerator
+from simpatico.models import ProteinEncoderDefaults
 from torch_geometric.nn import GATv2Conv, Sequential
 from torch_geometric.nn.models import MLP
 from torch_geometric.nn.aggr import AttentionalAggregation, MaxAggregation
@@ -37,15 +38,15 @@ class ProteinEncoder(torch.nn.Module):
 
     def __init__(
         self,
-        feature_dim,
-        hidden_dim,
-        out_dim,
-        heads=4,
-        blocks=6,
-        block_depth=2,
-        atom_k=10,
-        atom_vox_k=15,
-        vox_k=15,
+        feature_dim: int = ProteinEncoderDefaults["feature_dim"],
+        hidden_dim: int = ProteinEncoderDefaults["hidden_dim"],
+        out_dim: int = ProteinEncoderDefaults["out_dim"],
+        heads: int = 4,
+        blocks: int = 6,
+        block_depth: int = 2,
+        atom_k: int = 10,
+        atom_vox_k: int = 15,
+        vox_k: int = 15,
     ):
         super().__init__()
         # GAT layers concatenate heads, so true hidden dim is (hidden_dim*heads) dimensional.

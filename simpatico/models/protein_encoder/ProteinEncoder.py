@@ -48,6 +48,11 @@ class ProteinEncoder(torch.nn.Module):
         atom_vox_k: int = 15,
         vox_k: int = 15,
     ):
+        # NAMING CONVENTION NOTE:
+        # references to `vox` or `voxels` is a legacy convention from earlier versions of the model.
+        # these refer to `surface_atoms`
+        # this will change in next version.
+
         super().__init__()
         # GAT layers concatenate heads, so true hidden dim is (hidden_dim*heads) dimensional.
         adjusted_hidden_dim = hidden_dim * heads
@@ -80,12 +85,16 @@ class ProteinEncoder(torch.nn.Module):
         )
 
     def forward(self, data):
-        x, pos, pocket_mask, batch = (
+        x, pos, pocket_mask = (
             data.x.float(),
             data.pos,
             data.pocket_mask,
-            data.batch,
         )
+
+        if data.batch is None:
+            batch = torch.zeros(len(x))
+        else:
+            batch = data.batch
 
         device = x.device
 

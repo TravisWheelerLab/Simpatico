@@ -222,4 +222,4 @@ def main(args):
     pickle.dump(output_data, open(args.output_file, "wb"))
 
     if args.print_output:
-        report_results(*output_data)
+        report_results(output_data)

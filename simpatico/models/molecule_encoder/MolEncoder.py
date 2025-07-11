@@ -17,7 +17,7 @@ class MolEncoder(torch.nn.Module):
         input_projection_layer (torch.nn.Module): linear layer to project node features into [num_nodes, dims * heads]
                                                   size tensor expected by residual block.
         residual_blocks (torch.nn.ModuleList): List of residual blocks. Outputs will be concatenated in final layer.
-        ouptupt_projection_layer (torch.nn.Module): Non-linear layer which takes concatenation of residual_blocks outputs
+        output_projection_layer (torch.nn.Module): Non-linear layer which takes concatenation of residual_blocks outputs
                                                     and outputs final embeddings.
 
     Args:

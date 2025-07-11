@@ -11,19 +11,30 @@ from pathlib import Path
 
 def handle_no_overwrite(outfile):
     """
-    check if output exists or is being generated.
-    returns False if we should skip the file, otherwise True
-    input: output file path
-    output: bool
+    Check if does not exist, generate a sentinel file and return True.
+    Otherwise return False
+    Args:
+        outfile (str): file path
+    output:
+        (bool): Truth indicates that output file did not exists.
     """
     if os.path.exists(outfile) and os.path.getsize(outfile) > 0:
         return False
     else:
+        # Ensure that parallel jobs know this file is being worked on elsewhere.
         Path(outfile).touch()
         return True
 
 
-def report_results(queries, vector_db, results):
+def report_results(query_output):
+    """
+    Print human-readable results from vector database query/screen.
+    Args:
+        query_output: list containing data from vector database query produced by `simpatico query`
+    Returns:
+        (None): prints output
+    """
+    queries, vector_db, results = query_output
     target_list = ">query sources:\n"
     db_list = ">db sources:\n"
     results_content = ">results:\n"
@@ -56,8 +67,20 @@ def report_results(queries, vector_db, results):
 
 
 class ProteinLigandDataLoader:
-    def __init__(self, pl_graph_pairs: List[Data], batch_size: int):
+    """
+    Data loader object for storing and producing protein-ligand pairs during training.
 
+    Args:
+        pl_graph_pairs (List[(Data, Data)]): List of protein-ligand graph pairs.
+        batch_size (int): batch size
+
+    Attributes:
+        proteins (List[Data]): N-length list of proteins
+        ligands (List[Data]): N-length list of ligands
+        batch_size (int): batch size
+    """
+
+    def __init__(self, pl_graph_pairs: List[Data], batch_size: int):
         self.proteins = []
         self.ligands = []
         self.batch_size = batch_size
@@ -68,16 +91,22 @@ class ProteinLigandDataLoader:
 
         self.size = len(self.proteins)
         self.batch_iterator = self.new_batch_iterator()
-
         self.set_proximal_atom_masks()
 
     def new_batch_iterator(self):
+        """
+        construct new generator for random indices in upcoming batches
+        """
         random_index = torch.randperm(self.size)
         for i in range(0, len(random_index), self.batch_size):
             yield random_index[i : i + self.batch_size]
 
     def set_proximal_atom_masks(self, r: Optional[int] = 4):
-        """Adds per-node boolean masks to graphs in self.proteins and self.ligands indicating whether or not atom is involved in interaction."""
+        """
+        For each p-l pair, add per-node boolean masks to graphs in self.proteins and self.ligands indicating whether atom is involved in interaction.
+        Args:
+            r (int, optional): radius value that determines interaction-distance
+        """
         for g_i in range(self.size):
             protein_mask, ligand_mask = graph_utils.get_proximal_atom_masks(
                 self.proteins[g_i].pos, self.ligands[g_i].pos, r
@@ -86,10 +115,22 @@ class ProteinLigandDataLoader:
             self.ligands[g_i].proximal = ligand_mask
 
     def get_random_negatives(self, mol_batch):
+        """
+        returns random index of all atoms in molecule batch.
+        Args:
+            mol_batch (Batch): molecular graph batch
+        """
         return torch.randperm(mol_batch.x.size(0))
 
     def get_random_pocket(self, protein_graph: Data) -> torch.Tensor:
-        """Selects random coordinate based on graph's 'proximal' mask as pocket center"""
+        """
+        Selects random coordinate based on graph's 'proximal' mask as pocket center
+        Args:
+            protein_graph (Data): protein graph
+        Returns:
+            (torch.Tensor): boolean mask to indicate pocket surface atoms
+        """
+
         pocket_atoms = torch.where(protein_graph.proximal)[0]
 
         if pocket_atoms.size(0) == 0:

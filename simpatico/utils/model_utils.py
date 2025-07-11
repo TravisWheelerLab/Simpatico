@@ -17,6 +17,9 @@ class PositionalEdgeGenerator(torch.nn.Module):
         y_subset: (torch.Tensor): index of nodes for which we want to find neighbors
         k (int): closest neighbor count
         batch (torch.Tensor): PyG graph batch index
+
+    Returns:
+        (torch.Tensor, torch.Tensor): edge index and distance-based edges of new knn-graph
     """
 
     def __init__(self, hidden_dim: int):

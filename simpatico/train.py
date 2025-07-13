@@ -101,14 +101,11 @@ def training_step(
         molecule_batch.batch,
     )
 
-    if prot_loss:
-        anchor_samples, positive_samples, negative_samples = (
-            output_handler.get_protein_anchor_pairs(difficulty=difficulty_value)
+    anchor_samples, positive_samples, negative_samples = (
+        output_handler.get_anchors_positives_negatives(
+            prot_anchor=prot_loss, difficulty=difficulty_value
         )
-    else:
-        anchor_samples, positive_samples, negative_samples = (
-            output_handler.get_mol_anchor_pairs(difficulty=difficulty_value)
-        )
+    )
 
     loss = positive_margin_loss(anchor_samples, positive_samples, negative_samples)
     return loss

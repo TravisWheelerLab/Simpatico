@@ -5,9 +5,17 @@ import torch
 
 
 def get_proximal_atom_masks(
-    protein_pos: torch.Tensor, ligand_pos: torch.Tensor, r: int = 4
+    protein_pos: torch.Tensor, ligand_pos: torch.Tensor, r: float = 4
 ) -> List[torch.Tensor]:
-    """Get per-node boolean masks of protein and ligand graphs in complex, indicating which atoms are interacting."""
+    """
+    Generate per-atom masks for protein and ligand graphs indicating which are involved in interactions.
+    Args:
+        protein_pos (torch.Tensor): position values of protein graph.
+        ligand_pos (torch.Tensor): position values of ligand graph.
+        r (float, optional): threshold distance for interactivity (default = 4).
+    Returns:
+        (torch.Tensor, torch.Tensor): boolean masks for protein and ligand graphs.
+    """
     protein_mask = torch.zeros(protein_pos.size(0)).bool()
     ligand_mask = torch.zeros(ligand_pos.size(0)).bool()
 
@@ -22,6 +30,15 @@ def get_proximal_atom_masks(
 def get_pocket_mask(
     protein_graph: Data, center: torch.Tensor, pocket_dim: int = 20
 ) -> torch.Tensor:
+    """
+    Specify a protein pocket  (i.e. a pocket-surface atom mask) based on voxel box of width, length, and height `pocket_dim`.
+    Args:
+        protein_graph (Data): protein PyG graph
+        center (torch.Tensor): center of voxel sphere
+        pocket_dim (int, optional): value used as width, length, and height of pocket box.
+    Returns:
+        (torch.Tensor): boolean mask specifying pocket surface atoms.
+    """
     zero_centered_range = torch.arange(-int(pocket_dim / 2), int(pocket_dim / 2) + 1)
     voxel_box = torch.cartesian_prod(*[zero_centered_range] * 3).float()
     pocket_coords = center + voxel_box

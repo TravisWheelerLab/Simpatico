@@ -8,18 +8,11 @@ class PositionalEdgeGenerator(torch.nn.Module):
     """
     Generates knn-based graph of edges between positional nodes and applies learnable non-linear layer to produce non-negative edge weights based on distance
 
+    Args:
+        hidden_dim (int): dimension of hidden layer in edge MLP.
+
     Attributes:
         MLP (Sequential[Linear, relu, Linear, relu]): produces edge weight values from distances
-
-    Args:
-        pos (torch.Tensor): Nx3 tensor of node positions
-        x_subset (torch.Tensor): index of potential neighbor nodes
-        y_subset: (torch.Tensor): index of nodes for which we want to find neighbors
-        k (int): closest neighbor count
-        batch (torch.Tensor): PyG graph batch index
-
-    Returns:
-        (torch.Tensor, torch.Tensor): edge index and distance-based edges of new knn-graph
     """
 
     def __init__(self, hidden_dim: int):
@@ -40,6 +33,17 @@ class PositionalEdgeGenerator(torch.nn.Module):
         k: int,
         batch: torch.Tensor,
     ):
+        """
+        Args:
+            pos (torch.Tensor): Nx3 tensor of node positions
+            x_subset (torch.Tensor): index of potential neighbor nodes
+            y_subset: (torch.Tensor): index of nodes for which we want to find neighbors
+            k (int): closest neighbor count
+            batch (torch.Tensor): PyG graph batch index
+
+        Returns:
+            (torch.Tensor, torch.Tensor): edge index and distance-based edges of new knn-graph
+        """
         device = pos.device
         connections = knn(
             pos[x_subset], pos[y_subset], k, batch[x_subset], batch[y_subset]
@@ -60,18 +64,18 @@ class ResLayer(torch.nn.Module):
     """
     A residual layer that performs graph attention convolution (GATv2) and adds the result to the input.
 
-    Attributes:
-        act (torch.nn.Module): The activation function applied after the convolution. Defaults to SiLU.
-        layer (GATv2Conv): The graph attention convolution layer.
-        dropout (torch.nn.Module): The dropout layer applied after the activation function to prevent overfitting.
-        norm (torch.nn.Module, optional): The normalization layer applied before activation.
-
     Args:
         dims (int): The dimensionality of the input features (per head).
         act (torch.nn.Module, optional): The activation function to use. Defaults to SiLU.
         dr (float, optional): The dropout rate. Defaults to 0.25.
         heads (int, optional): The number of attention heads in the GATv2 layer. Defaults to 4.
         edge_dim (int, optional): Number of dimensions in edge attributes.
+        norm (torch.nn.Module, optional): The normalization layer applied before activation.
+
+    Attributes:
+        act (torch.nn.Module): The activation function applied after the convolution. Defaults to SiLU.
+        layer (GATv2Conv): The graph attention convolution layer.
+        dropout (torch.nn.Module): The dropout layer applied after the activation function to prevent overfitting.
         norm (torch.nn.Module, optional): The normalization layer applied before activation.
     """
 
@@ -118,16 +122,13 @@ class ResBlock(torch.nn.Module):
     """
     A stack of residual layers.
 
-    Attributes:
-        res_block (torch_geometric.nn.Sequential): sequence of resblock to pass input through
-
     Args:
         dims (int): The dimensionality of the input features (per head).
         heads (int): Number of attention heads.
         depth (int): Number of residual layers.
 
-    Returns:
-        torch.Tensor: The output node feature matrix with shape [num_nodes, dims].
+    Attributes:
+        res_block (torch_geometric.nn.Sequential): sequence of resblock to pass input through
     """
 
     def __init__(

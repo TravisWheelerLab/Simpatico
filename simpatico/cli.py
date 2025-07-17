@@ -1,6 +1,5 @@
 import argparse
 from simpatico import train, evaluate, convert, get_train_set, query, print_results
-from simpatico.utils.utils import SmartFormatter
 
 
 def main():

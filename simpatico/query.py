@@ -22,7 +22,6 @@ from simpatico.models.molecule_encoder.MolEncoder import MolEncoder
 from simpatico.models.protein_encoder.ProteinEncoder import ProteinEncoder
 from simpatico.models import MolEncoderDefaults, ProteinEncoderDefaults
 from simpatico.utils.pdb_utils import pdb2pyg
-from simpatico.utils.utils import SmartFormatter
 
 from typing import Callable
 from glob import glob

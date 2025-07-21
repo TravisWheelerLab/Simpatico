@@ -1,5 +1,5 @@
 # About Simpatico 
-Simpatico is a graph neural network for producing high-dimensional embeddings of atoms in proteins and small molecules. Atomic representations produced by Simpatico are co-located in embedding space according to their interaction potential. This allows users to perform rapid virtual screening over extremely large datasets. In our paper (https://www.biorxiv.org/content/10.1101/2025.06.08.658499v1), we show that not only is Simpatico’s binding prediction accuracy competitive with state-of-the-art deep learning-assisted docking methods, but it can perform virtual screening more than 1000× faster. Furthermore, Simpatico embeddings are versatile: users may just as easily use them to screen protein pockets with a small-molecule target (akin to toxicology screening), or to assess shared binding properties between non-homologous protein structures.
+Simpatico is a graph neural network for producing high-dimensional embeddings of atoms in proteins and small molecules. Atomic representations produced by Simpatico are co-located in embedding space according to their interaction potential. This allows users to perform rapid virtual screening over extremely large datasets. In our [paper](https://www.biorxiv.org/content/10.1101/2025.06.08.658499v1), we show that not only is Simpatico’s binding prediction accuracy competitive with state-of-the-art deep learning-assisted docking methods, but it can perform virtual screening more than 1000× faster. Furthermore, Simpatico embeddings are versatile: users may just as easily use them to screen protein pockets with a small-molecule target (akin to toxicology screening), or to assess shared binding properties between non-homologous protein structures.
 
 ## Installation
 
@@ -63,7 +63,7 @@ Again, adjust `cu12` to correspond to your CUDA version if needed.
 With all dependencies installed, you can now install simpatico itself:
 
 ```bash
-git clone git@github.com:TravisWheelerLab/Simpatico.git
+git clone https://github.com/TravisWheelerLab/Simpatico.git
 pip install Simpatico
 ```
 

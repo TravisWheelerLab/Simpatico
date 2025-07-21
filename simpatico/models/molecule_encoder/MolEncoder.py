@@ -12,6 +12,13 @@ from simpatico.models import MolEncoderDefaults
 class MolEncoder(torch.nn.Module):
     """
     Generates molecular atom embeddings from molecular graph.
+    Args:
+        feature_dim (int, optional): Dimensionality of the input features.
+        hidden_dim (int, optional): Dimensionality of hidden layers.
+        out_dim (int, optional): Dimensionality of output.
+        heads (int, optional): Number of attention heads in graph attention layers (default 4).
+        blocks (int, optional): Number of residual blocks in model (default 3).
+        block_depth (int, optional): Number of residual layers in residual blocks (default 2).
 
     Attributes:
         input_projection_layer (torch.nn.Module): linear layer to project node features into [num_nodes, dims * heads]
@@ -19,17 +26,6 @@ class MolEncoder(torch.nn.Module):
         residual_blocks (torch.nn.ModuleList): List of residual blocks. Outputs will be concatenated in final layer.
         output_projection_layer (torch.nn.Module): Non-linear layer which takes concatenation of residual_blocks outputs
                                                     and outputs final embeddings.
-
-    Args:
-        feature_dim (int): Dimensionality of the input features.
-        hidden_dim (int): Dimensionality of hidden layers.
-        out_dim (int): Dimensionality of output.
-        heads (int, optional): Number of attention heads in graph attention layers (default 4).
-        blocks (int, optional): Number of residual blocks in model (default 3).
-        block_depth (int, optional): Number of residual layers in residual blocks (default 2).
-
-    Returns:
-        (torch.Tensor): 'out_dim' dimensional atom embeddings
     """
 
     def __init__(
@@ -60,6 +56,13 @@ class MolEncoder(torch.nn.Module):
         )
 
     def forward(self, data):
+        """
+        Forward method. Produces atom-level embeddings of PyG molecular graphs.
+        Args:
+            data (Batch): PyG batch of small-molecule graphs.
+        Returns:
+            (torch.Tensor): (N, self.out_dim) shaped tensor of embedding values generated for each atom.
+        """
         x, edge_index, edge_attr = (
             data.x,
             data.edge_index.long(),

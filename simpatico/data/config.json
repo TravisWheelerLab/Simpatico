@@ -96,6 +96,5 @@
     ],
     "H_count_vocab": [0,1,2,3],
     "protein_filetypes": [".pdb"],
-    "molecule_filetypes": [".pdb", ".sdf", ".mol2", ".ism", ".ism"],
-    "default_weights": "model_v1.pt"
+    "molecule_filetypes": [".pdb", ".sdf", ".mol2", ".ism", ".ism"]
 }

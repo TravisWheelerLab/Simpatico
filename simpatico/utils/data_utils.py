@@ -50,7 +50,6 @@ def report_results(query_output: List) -> None:
         q_item_index = queries["item_batch"] == qi
         q_source_idx = queries["file_batch"][q_item_index][0].item()
         q_source_item_idx = queries["source_index"][q_item_index][0].item()
-        query_source = queries["sources"][q_source_idx]
 
         for result_idx in result_vals[1]:
             r_idx = result_idx.item()
@@ -58,7 +57,6 @@ def report_results(query_output: List) -> None:
             r_source_idx = vector_db["file_batch"][r_item_index][0].item()
             r_source_item_idx = vector_db["source_index"][r_item_index][0].item()
 
-            r_source = vector_db["sources"][r_source_idx]
             results_content += f"{q_source_idx+1} {q_source_item_idx+1} {r_source_idx+1} {r_source_item_idx+1} {rank}\n"
             rank += 1
 

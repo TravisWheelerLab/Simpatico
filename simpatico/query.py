@@ -52,30 +52,36 @@ class VectorDatabase:
     """
     Interface for embedding collections to be used for building and querying FAISS vector databases.
 
+    Args:
+        embed_files (list[str]): list of filepaths to PyG graph files containing embedding values to store in VectorDatabase.
+        score_threshold (tuple): max-distance and n-quantile distantance statistics used in aggregation/scoring function during query.
+
     Attributes:
-        sources (list):
+        sources (list): ordered list of filepaths of ultimate vector sources.
+        vectors (torch.Tensor): list of vectors.
+        item_batch (torch.Tensor): pyg-style batch tensor corresponding vectors to a specific item/graph.
+        file_batch (torch.Tensor): pyg-style batch tensor corresponding vectors to a source file.
+        source_index (torch.Tensor): pyg-style batch tensor specifying which item of the original source file vector belongs to.
+        score-thresholds (tuple): max-distance and n-quantile distantance statistics used in aggregation/scoring function during query.
     """
 
-    def __init__(self):
+    def __init__(self, embed_files, score_thresholds=None):
         self.sources = []
-        self.vectors = None
-        self.item_batch = None
-        self.file_batch = None
-        self.score_thresholds = None
-        self.source_index = None
+        self.score_thresholds = score_thresholds
 
-    def initialize(self, embed_files, score_thresholds=None):
         vectors = []
         item_batch = []
         file_batch = []
         source_index = []
 
+        # Iterate through inputs and consolidate batch values across files.
         for ef_i, embed_file in enumerate(embed_files):
             g = torch.load(embed_file, weights_only=False)
 
             self.sources.append(g.source)
             vectors.append(g.x)
 
+            # update batch values so we can stack (first value is previous batch's last value + 1)
             batch_modifier = item_batch[-1][-1] + 1 if len(item_batch) else 0
 
             item_batch.append(g.batch + batch_modifier)
@@ -96,27 +102,44 @@ class VectorDatabase:
         if score_thresholds:
             self.score_thresholds = score_thresholds
 
+    def get_index_data(self):
+        """
+        Return all indexing data.
+        """
+        return {
+            "sources": self.sources,
+            "item_batch": self.item_batch,
+            "file_batch": self.file_batch,
+            "source_index": self.source_index,
+        }
+
     def get_score_thresholds(
         self, vector_db, n_random: int = 4000, q: float = 0.99, n_trials=5
     ):
-        # pick sample size that works for both arrays
-        n1, _ = self.vectors.shape
-        n2, _ = vector_db.vectors.shape
+        """
+        Retrieve and store in `self.score_thresholds` per-item maximum observed distance and nth-quantile score values
+        from a random sampling of distances between `self.vectors` and those of a different VectorDatabase
+        (used for score aggregation during query).
 
-        k1 = min(n_random, n1)
-        k2 = min(n_random, n2)
+        Args:
+            vector_db (VectorDatabase): VectorDatabase object containing vectors to randomly sample distances from.
+            n_random (int, optional): number of random vector distances to sample.
+            q (float, optional): score quantile (default = 0.99)
+            n_trials (int, optional): number of sampling trials to perform (workaround for maxing out `torch.cdist`.)
+        """
 
+        # We need a unique maximum distance and quantile score value for each item in the VectorDatabase.
         item_max_D = torch.zeros(self.item_batch[-1] + 1)
         item_thresholds = torch.zeros_like(item_max_D)
 
-        for trial_n in range(n_trials):
-            idx2 = torch.randperm(len(vector_db.vectors))[:n_random]
-            rv_2 = vector_db.vectors[idx2]
+        for _ in range(n_trials):
+            r_idx = torch.randperm(len(vector_db.vectors))[:n_random]
+            random_vecs = vector_db.vectors[r_idx]
 
             for item_index in torch.arange(len(item_max_D)):
                 item_vectors = self.vectors[self.item_batch == item_index]
 
-                D = torch.cdist(item_vectors, rv_2).flatten()
+                D = torch.cdist(item_vectors, random_vecs).flatten()
                 max_D = D.max()
                 S = max_D - D
                 threshold = torch.quantile(S, q)
@@ -126,19 +149,15 @@ class VectorDatabase:
 
         self.score_thresholds = (item_max_D, item_thresholds)
 
-    def save_metadata(self, path):
-        metadata = {"sources": self.sources, "score_thresholds": self.score_thresholds}
-        with open(path, "wb") as metadata_out:
-            pickle.dump(metadata, metadata_out)
-
-    def load(self, path):
-        with open(path, "rb") as metadata_in:
-            metadata = pickle.load(metadata_in)
-
-        self.initialize(metadata["sources"], metadata["score_thresholds"])
-
     def faiss_index(self, gpu=True):
-        np_vectors = self.vectors.detach().cpu().numpy().astype("float32")
+        """
+        Convert self.vectors object into a proper FAISS index for querying.
+        Args:
+            gpu (bool, optional): indicates use of GPU (default = True).
+        Returns:
+            faiss index object
+        """
+        np_vectors = self.np_vectors()
 
         dim = np_vectors.shape[1]
         index = faiss.IndexFlatL2(dim)
@@ -151,9 +170,21 @@ class VectorDatabase:
         return index
 
     def np_vectors(self):
+        """
+        return numpy version of self.vectors.
+        """
         return self.vectors.detach().cpu().numpy().astype("float32")
 
     def get_scores(self, D, I, query_db):
+        """
+        Provided the results of a FAISS-based nearest neighbors operation, get per-item scores of the queried VectorDatabase.
+        Nearest-neighbors operation returns N = 2048 nearest neighbors.
+
+        Args:
+            D (np.array): numpy array of distances of 2048 neighbor-distance values per-vector.
+            I (np.array): neighbor-vector indices corresponding to values in D.
+            query_db (VectorDatabase): VectorDB used as query.
+        """
         D = torch.as_tensor(D)
         I = torch.as_tensor(I)
 
@@ -163,7 +194,10 @@ class VectorDatabase:
         max_D = score_thresholds[0][target_batch].unsqueeze(1)
         threshold_S = score_thresholds[1][target_batch].unsqueeze(1)
 
+        # Score value calculated so that the smaller the vector distance, the greater the score.
         S = torch.clamp(max_D.unsqueeze(1) - D - threshold_S.unsqueeze(1), min=0)
+
+        # get index of VectorDatabase item, rather than index of individual vectors.
         mol_I = self.item_batch[I].long()
 
         target_mol_scores = []
@@ -182,7 +216,17 @@ class VectorDatabase:
 
         return target_mol_scores
 
-    def search(self, query_db):
+    def query(self, query_db):
+        """
+        Query `self.vectors` with vectors from another VectorDatabase.
+
+        Args:
+            query_db (VectorDatabase): VectorDatabase used to query `self.vectors`.
+
+        Returns:
+            (list): List containing for each item in query, a 2-tuple list containing
+            tensor of sorted non-zero scores and corresponding item index tensor from queried VectorDatabase.
+        """
         queries = query_db.np_vectors()
         faiss_index = self.faiss_index()
 
@@ -203,9 +247,6 @@ def main(args):
     query_files = []
     db_files = []
 
-    queries = VectorDatabase()
-    vector_db = VectorDatabase()
-
     with open(args.input_file) as spec_in:
         for line in spec_in:
             data_type, embed_file = [x.strip() for x in line.split(",")]
@@ -217,14 +258,15 @@ def main(args):
             if data_type == "d":
                 db_files.append(embed_file)
 
-    queries.initialize(query_files)
-    vector_db.initialize(db_files)
+    queries = VectorDatabase(query_files)
+    vector_db = VectorDatabase(db_files)
 
     queries.get_score_thresholds(vector_db)
 
-    search_results = vector_db.search(queries)
+    search_results = vector_db.query(queries)
 
-    output_data = [vars(queries), vars(vector_db), search_results]
+    # To produce human readable results, we need to save data from queries, database, and search results.
+    output_data = [queries.get_index_data(), vector_db.get_index_data(), search_results]
     pickle.dump(output_data, open(args.output_file, "wb"))
 
     if args.print_output:

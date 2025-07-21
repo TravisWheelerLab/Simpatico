@@ -39,8 +39,15 @@ def add_arguments(parser):
     parser.set_defaults(main=main)
 
 
-def gather_structure_files(input_string):
-    input_basename, input_filetype = path.splitext(input_string)
+def gather_structure_files(input_string) -> list[str]:
+    """
+    Parse input string and generate list of input structural files.
+    Args:
+        input_string (str): Path to input, either batch file (.txt, .csv)
+    Returns:
+        (list[str]): list of structure files to convert to PyG graphs.
+    """
+    _, input_filetype = path.splitext(input_string)
     # filetypes we directly convert
     structure_filetypes = config["protein_filetypes"] + config["molecule_filetypes"]
 
@@ -59,8 +66,18 @@ def gather_structure_files(input_string):
         return glob(input_string)
 
 
-def new_filename(filepath, extension, output_dir, suffix=None):
-    basename = path.splitext(path.basename(filepath))[0]
+def new_filename(input_file, extension, output_dir, suffix=None):
+    """
+    Generate the the filename to be used for file converted to PyG.
+    Args:
+        input_file (str): path to input filename.
+        extension (str): file extension to use (usually .pyg or .pkl).
+        output_dir (str): directory where output file will be stored.
+        suffix (str, optional): string to append to file name before extension.
+    Returns:
+        (str): path to new PyG file.
+    """
+    basename = path.splitext(path.basename(input_file))[0]
     output_dir = output_dir + "/" if output_dir[-1] != "/" else output_dir
     extension = "." + extension if extension[0] != "." else extension
 

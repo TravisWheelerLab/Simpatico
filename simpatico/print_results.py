@@ -16,4 +16,4 @@ def main(args):
     with open(args.input, "rb") as pkl_in:
         results_data = pickle.load(pkl_in)
 
-    report_results(*results_data)
+    report_results(results_data)

@@ -101,14 +101,11 @@ def training_step(
         molecule_batch.batch,
     )
 
-    if prot_loss:
-        anchor_samples, positive_samples, negative_samples = (
-            output_handler.get_protein_anchor_pairs(difficulty=difficulty_value)
+    anchor_samples, positive_samples, negative_samples = (
+        output_handler.get_anchors_positives_negatives(
+            prot_anchor=prot_loss, difficulty=difficulty_value
         )
-    else:
-        anchor_samples, positive_samples, negative_samples = (
-            output_handler.get_mol_anchor_pairs(difficulty=difficulty_value)
-        )
+    )
 
     loss = positive_margin_loss(anchor_samples, positive_samples, negative_samples)
     return loss
@@ -159,6 +156,7 @@ def main(args):
 
     protein_encoder = ProteinEncoder(**ProteinEncoderDefaults).to(device)
     mol_encoder = MolEncoder(**MolEncoderDefaults).to(device)
+    get_hard_negative_difficulty = hard_negative_scheduler(50, 0.05)
 
     if args.load_model:
         protein_model_weights, mol_model_weights = torch.load(args.load_model)
@@ -166,20 +164,18 @@ def main(args):
         protein_encoder.load_state_dict(protein_model_weights)
         mol_encoder.load_state_dict(mol_model_weights)
 
-        initial_validation_loss, _ = validate(
-            protein_encoder,
-            mol_encoder,
-            validation_loader,
-            device,
+        difficulty_value = get_hard_negative_difficulty(args.epoch_start)
+
+        initial_validation_loss = validate(
+            validation_loader, protein_encoder, mol_encoder, difficulty_value
         )
-        log_text(f"Best validation score: {initial_validation_loss}")
+        log_text(f"Best validation loss: {initial_validation_loss}")
 
     optimizer = torch.optim.AdamW(
         list(protein_encoder.parameters()) + list(mol_encoder.parameters()),
         lr=args.learning_rate,
     )
 
-    get_hard_negative_difficulty = hard_negative_scheduler(50, 0.05)
     prot_loss = True
     best_validation_loss = None
 
@@ -205,7 +201,7 @@ def main(args):
 
             if batch_idx % 10 == 0:
                 loss_avg = torch.hstack(loss_vals).mean().item()
-                log_text(f"Epoch {epoch}, batch {batch_idx}: {loss_avg}")
+                log_text(f"Epoch {epoch}, batch {batch_idx} loss: {loss_avg}")
                 loss_vals = []
 
             loss.backward()
@@ -219,7 +215,7 @@ def main(args):
             validation_loader, protein_encoder, mol_encoder, difficulty_value
         )
 
-        log_text(f"Epoch {epoch} validation: {epoch_validation_loss}")
+        log_text(f"Epoch {epoch} validation loss: {epoch_validation_loss}")
 
         if epoch_validation_loss < best_validation_loss:
             torch.save(

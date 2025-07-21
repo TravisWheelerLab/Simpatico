@@ -17,23 +17,20 @@ class ProteinEncoder(torch.nn.Module):
     """
     Generates protein atom embeddings from protein graph.
 
+    Args:
+        feature_dim (int, optional): Dimensionality of the input features.
+        hidden_dim (int, optional): Dimensionality of hidden layers.
+        out_dim (int, optional): Dimensionality of output.
+        heads (int, optional): Number of attention heads in graph attention layers (default 4).
+        blocks (int, optional): Number of residual blocks in model (default 3).
+        block_depth (int, optional): Number of residual layers in residual blocks (default 2).
+
     Attributes:
         input_projection_layer (torch.nn.Module): linear layer to project node features into [num_nodes, dims * heads]
                                                   size tensor expected by residual block.
         residual_blocks (torch.nn.ModuleList): List of residual blocks. Outputs will be concatenated in final layer.
         ouptupt_projection_layer (torch.nn.Module): Non-linear layer which takes concatenation of residual_blocks outputs
                                                     and outputs final embeddings.
-
-    Args:
-        feature_dim (int): Dimensionality of the input features.
-        hidden_dim (int): Dimensionality of hidden layers.
-        out_dim (int): Dimensionality of output.
-        heads (int, optional): Number of attention heads in graph attention layers (default 4).
-        blocks (int, optional): Number of residual blocks in model (default 3).
-        block_depth (int, optional): Number of residual layers in residual blocks (default 2).
-
-    Returns:
-        (torch.Tensor): 'out_dim' dimensional atom embeddings
     """
 
     def __init__(
@@ -48,6 +45,11 @@ class ProteinEncoder(torch.nn.Module):
         atom_vox_k: int = 15,
         vox_k: int = 15,
     ):
+        # NAMING CONVENTION NOTE:
+        # references to `vox` or `voxels` is a legacy convention from earlier versions of the model.
+        # these refer to `surface_atoms`
+        # this will change in next version.
+
         super().__init__()
         # GAT layers concatenate heads, so true hidden dim is (hidden_dim*heads) dimensional.
         adjusted_hidden_dim = hidden_dim * heads
@@ -80,12 +82,25 @@ class ProteinEncoder(torch.nn.Module):
         )
 
     def forward(self, data):
-        x, pos, pocket_mask, batch = (
+        """
+        Forward method. Produces atom-level embeddings of PyG protein-pocket graphs.
+        Args:
+            data (Batch): PyG batch of protein-pocket graphs.
+        Returns:
+            (torch.Tensor): (N, self.out_dim) shaped tensor of embedding values generated for pocket-surface atoms.
+            (torch.Tensor): (N, 3) sized tensor corresponding to pocket-surface postions.
+            (torch.Tensor): (N) sized tensor corresponding to pocket-surface postions.
+        """
+        x, pos, pocket_mask = (
             data.x.float(),
             data.pos,
             data.pocket_mask,
-            data.batch,
         )
+
+        if data.batch is None:
+            batch = torch.zeros(len(x))
+        else:
+            batch = data.batch
 
         device = x.device
 

@@ -21,7 +21,6 @@ from simpatico.utils.data_utils import (
 from simpatico.models.molecule_encoder.MolEncoder import MolEncoder
 from simpatico.models.protein_encoder.ProteinEncoder import ProteinEncoder
 from simpatico.utils.pdb_utils import pdb2pyg
-from simpatico.utils.utils import SmartFormatter
 from simpatico import config
 
 from typing import Callable
@@ -33,7 +32,7 @@ logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
 
 
-def add_arguments(parser):
+def add_arguments(parser: argparse.ArgumentParser):
     parser.add_argument(
         "input_file",
         type=str,
@@ -104,10 +103,9 @@ def add_arguments(parser):
     return parser
 
 
-def get_encoder(args):
+def get_encoder(args: argparse.ArgumentParser):
     """
-    input may be protein or molecular structural file, or batch file for either.
-    get encoder according to input type.
+    Get encoder according to input type (either protein or molecular structural file, or batch file).
 
     Args:
         args (ArgumentParser): script arguments
@@ -135,13 +133,14 @@ def get_encoder(args):
     return encoder
 
 
-def get_input_list(args):
+def get_input_list(args) -> list[list[str]]:
     """
-    protein/molecule structure files are stored in list, which we iterate through during eval.
-    gather those files and produce list.
+    Gather protein/molecule structure files and produce list for evaluation.
 
-    input: script arguments (ArgumentParser object)
-    output: list of paths to structural files
+    Args:
+        args (ArgumentParser): parsed script arguments
+    Returns:
+        (list[list[str]]): list of lists of paths to structural files
     """
     input_file = args.input_file
 
@@ -165,7 +164,14 @@ def get_input_list(args):
     return input_list
 
 
-def check_files(input_list):
+def check_files(input_list: list[list[str]]) -> None:
+    """
+    Check that all files included in input list produced by `get_input_list` exist. Raise FileNotFoundError if a file is missing.
+    Args:
+        args (ArgumentParser): parsed script arguments
+    Returns:
+        (None): list of lists of paths to structural files
+    """
     for row in input_list:
         for input_file in row:
             if input_file is None:
@@ -175,13 +181,14 @@ def check_files(input_list):
                 raise FileNotFoundError(f"Input file does not exist: {input_file}")
 
 
-def get_input_data_loader(input_line, args):
+def get_input_data_loader(input_line: list[str], args: argparse.ArgumentParser):
     """
-    prepare item from input list for evaluation, according to input type logic
-    input:
-        1. line from input list data
-        2. script arguments (ArgumentParser object)
-    output: data loader object containing data for eval (DataLoader)
+    Prepare item from input list for evaluation, according to logic reserved for different input types.
+    Args:
+        input_line (list[str]): line from input list produced by `get_input_list`
+        args (ArgumentParser): script arguments
+    Returns:
+        (DataLoader): data loader object containing data for eval.
     """
     structure_file = input_line[0]
 
@@ -200,7 +207,7 @@ def get_input_data_loader(input_line, args):
     elif args.protein:
         input_g = pdb2pyg(structure_file, pocket_coords=pocket_spec)
     elif args.molecule:
-        input_g = molfile2pyg(structure_file, get_pos=True)
+        input_g = molfile2pyg(structure_file)
 
     if args.protein:
         input_g = Batch.from_data_list([input_g])
@@ -213,11 +220,14 @@ def get_input_data_loader(input_line, args):
 
 def evaluate_data(input_data_loader, outfile, encoder, args):
     """
-    Produce embeddings for data in input data loader
-    input:
-        1. input data loader (DataLoader object)
-        2. source structure file (str)
-    output: data loader object containing data for eval (Batch object)
+    Produce embeddings from data.
+    Args:
+        input_data_loader (DataLoader): input data loader.
+        outfile (str): path to output file string.
+        encoder (MolEncoder | ProteinEncoder): encoding model to generate embeddings with
+        args (ArgumentParser): script arguments
+    Returns:
+        (Batch): PyG batch of protein or molecule embedding values.
     """
     embed_failed = False
     data_out = []

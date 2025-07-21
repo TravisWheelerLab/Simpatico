@@ -49,6 +49,13 @@ if __name__ == "__main__":
 
 
 class VectorDatabase:
+    """
+    Interface for embedding collections to be used for building and querying FAISS vector databases.
+
+    Attributes:
+        sources (list):
+    """
+
     def __init__(self):
         self.sources = []
         self.vectors = None

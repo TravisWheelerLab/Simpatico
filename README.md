@@ -1,5 +1,5 @@
 # About Simpatico 
-Simpatico is a graph neural network for producing high-dimensional embeddings of atoms in proteins and small molecules. Atomic representations produced by Simpatico are co-located in embedding space according to their interaction potential. This allows users to perform rapid virtual screening over extremely large datasets. In our paper (https://www.biorxiv.org/content/10.1101/2025.06.08.658499v1), we show that not only is Simpatico’s binding prediction accuracy competitive with state-of-the-art deep learning-assisted docking methods, but it can perform virtual screening more than 1000× faster. Furthermore, Simpatico embeddings are versatile: users may just as easily use them to screen protein pockets with a small-molecule target (akin to toxicology screening), or to assess shared binding properties between non-homologous protein structures.
+Simpatico is a graph neural network for producing high-dimensional embeddings of atoms in proteins and small molecules. Atomic representations produced by Simpatico are co-located in embedding space according to their interaction potential. This allows users to perform rapid virtual screening over extremely large datasets. In our [paper](https://www.biorxiv.org/content/10.1101/2025.06.08.658499v1), we show that not only is Simpatico’s binding prediction accuracy competitive with state-of-the-art deep learning-assisted docking methods, but it can perform virtual screening more than 1000× faster. Furthermore, Simpatico embeddings are versatile: users may just as easily use them to screen protein pockets with a small-molecule target (akin to toxicology screening), or to assess shared binding properties between non-homologous protein structures.
 
 ## Installation
 
@@ -40,8 +40,12 @@ python -c "import torch; print(torch.version.cuda)"
 
 ### 2. Installing PyG
 
-Install the correct PyG packages according to the version numbers from the previous command:
+First, install the base library of PyTorch Geometric.
+```bash
+pip install pytorch_geometric
+```
 
+Then, install the correct PyG packages according to the version numbers from the previous command:
 ```bash
 pip install pyg_lib torch_scatter torch_sparse torch_cluster torch_spline_conv -f https://data.pyg.org/whl/torch-2.7.0+cu126.html
 ```
@@ -63,7 +67,7 @@ Again, adjust `cu12` to correspond to your CUDA version if needed.
 With all dependencies installed, you can now install simpatico itself:
 
 ```bash
-git clone git@github.com:TravisWheelerLab/Simpatico.git
+git clone https://github.com/TravisWheelerLab/Simpatico.git
 pip install Simpatico
 ```
 
@@ -248,7 +252,7 @@ With the proper `.csv` file, you may now kickoff a new round of training with th
 ### Command Usage
 
 ```bash
-simpatico train <input_file> <output_file> [OPTIONS]
+simpatico train <input_file> <weight_path> [OPTIONS]
 ```
 
 ### Example
@@ -257,7 +261,7 @@ simpatico train <input_file> <output_file> [OPTIONS]
 simpatico train examples/spec_files/train_example.csv examples/data/example_weights.pt -o examples/data/example_train.out -l simpatico/models/weights/model_v1.pt
 ```
 
-In this example, we are loading the pretrained weights `-l simpatico/models/weights/model_v1.pt` and updating them with our new training examples. Note that this is a naive approach to fine-tuning, and we have not yet implemented regularization techniques appropriate for proper fine-tuning. To train weights completely anew, simply leave out the `-l` argument.  
+In this example, we are loading the pretrained weights `-l simpatico/models/weights/model_v1.pt` and updating them with our new training examples, and storing the updated weights in `examples/data/example_weights.pt`. Note that this is a naive approach to fine-tuning, and we have not yet implemented regularization techniques appropriate for a proper fine-tuning protocol. To train weights completely anew, simply leave out the `-l` argument.  
 </details closed>
 
 

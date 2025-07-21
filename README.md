@@ -42,7 +42,7 @@ python -c "import torch; print(torch.version.cuda)"
 
 First, install the base library of PyTorch Geometric.
 ```bash
-pip install pytorch_geometric
+pip install torch_geometric
 ```
 
 Then, install the correct PyG packages according to the version numbers from the previous command:

@@ -141,11 +141,14 @@ def get_H_counts(
     return H_count_features
 
 
-def get_xyz_from_file(input_file):
+def get_xyz_from_file(input_file: str) -> torch.Tensor:
     """
-    generates a tensor of x,y,z coordinate values from molecular structure  or .csv file
-    input: path to file (.csv, .txt, .mol2, .sdf)
-    output: float-valued tensor of shape (N,3)
+    Generates a tensor of x,y,z coordinate values from molecular structure  or .csv file.
+
+    Args:
+        input_file (str): path to file (.csv, .txt, .mol2, .sdf)
+    Returns:
+        (torch.Tensor): float-valued tensor of shape (N,3)
     """
     _, filetype = path.splitext(input_file)
 

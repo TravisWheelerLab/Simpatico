@@ -2,8 +2,13 @@ import json
 import os
 from .models.molecule_encoder.MolEncoder import MolEncoder
 from .models.protein_encoder.ProteinEncoder import ProteinEncoder
+import importlib.resources as pkg_resources
+import simpatico
 
-config_path = os.path.join(os.path.dirname(__file__), "config.json")
+with pkg_resources.open_text("simpatico", "config.json") as f:
+    config = json.load(f)
 
-with open(config_path, "r") as config_file:
-    config = json.load(config_file)
+with pkg_resources.path(
+    "simpatico.models.weights", config["default_weights"]
+) as weight_path:
+    config["default_weights_path"] = str(weight_path)

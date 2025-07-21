@@ -1,4 +1,6 @@
 import re
+from os import path
+import sys
 import os
 from copy import deepcopy
 import torch
@@ -6,6 +8,7 @@ import numpy as np
 from torch_geometric.data import Data
 from rdkit import Chem
 from rdkit.Chem import AllChem, AddHs
+from rdkit import RDLogger
 from torch_geometric.utils import subgraph, to_undirected
 from torch_geometric.data import Batch
 from rdkit.Chem.rdchem import Mol
@@ -138,8 +141,38 @@ def get_H_counts(
     return H_count_features
 
 
+def get_xyz_from_file(input_file: str) -> torch.Tensor:
+    """
+    Generates a tensor of x,y,z coordinate values from molecular structure  or .csv file.
+
+    Args:
+        input_file (str): path to file (.csv, .txt, .mol2, .sdf)
+    Returns:
+        (torch.Tensor): float-valued tensor of shape (N,3)
+    """
+    _, filetype = path.splitext(input_file)
+
+    if filetype in config["molecule_filetypes"]:
+        mol_graph = molfile2pyg(input_file, coords_only=True)
+        xyz_coords = mol_graph.pos
+    else:
+        xyz_coords = []
+        with open(input_file) as pos_in:
+            for line in pos_in:
+                line_content = [float(x.strip()) for x in line.split(",")]
+                xyz_coords.append(line_content)
+
+        xyz_coords = torch.tensor(xyz_coords)
+    return xyz_coords
+
+
 def mol2pyg(
-    m: Mol, ignore_pos: bool = False, removeHs: bool = True, get_scaffold=False
+    m: Mol,
+    ignore_pos: bool = False,
+    removeHs: bool = True,
+    get_scaffold=False,
+    coords_only=False,
+    source_idx=None,
 ) -> Optional[Data]:
     """
     Converts an RDKit Mol object into a PyG Data object representing the molecular graph.
@@ -150,6 +183,7 @@ def mol2pyg(
         Optional[Data]: PyG Data object containing the graph representation of the molecule, or None if conversion fails.
     """
     standardizer = Standardizer()
+    RDLogger.DisableLog("rdApp.*")
 
     # If we cannot standardize molecule, we won't be able to extract the scaffold
     try:
@@ -177,6 +211,13 @@ def mol2pyg(
             print(e)
             get_scaffold = False
 
+    if ignore_pos is False:
+        # Get the 3D coordinates of atoms in the molecule
+        pos = get_mol_pos(m)
+
+        if coords_only:
+            return Data(pos=pos)
+
     mol_atom_vocab = config.get("mol_atom_vocab")
 
     # Generate one-hot encoded atom features
@@ -185,10 +226,6 @@ def mol2pyg(
     if get_scaffold:
         scaffold_mask = torch.zeros(atom_species_onehots.size(0)).bool()
         scaffold_mask[scaffold_atoms] = True
-
-    if ignore_pos is False:
-        # Get the 3D coordinates of atoms in the molecule
-        pos = get_mol_pos(m)
 
     # Generate edge indices and edge attributes for the molecular graph
     edge_index, edge_attr = get_mol_edges(m)
@@ -239,11 +276,17 @@ def mol2pyg(
     if ignore_pos is False:
         mol_graph.pos = pos
 
+    if source_idx is not None:
+        mol_graph.source_idx = torch.zeros(len(mol_graph.x)).fill_(source_idx).long()
+
     return mol_graph
 
 
 def molfile2pyg(
-    m_file: str, get_pos: bool = True, k: int = 3, get_scaffold: bool = False
+    m_file: str,
+    k: int = 3,
+    get_scaffold: bool = False,
+    coords_only=False,
 ) -> Optional[Batch]:
     """
     Converts a molecular file (e.g., SDF, PDB) into a batch of molecular PyG graphs.
@@ -256,22 +299,20 @@ def molfile2pyg(
     """
     # Extract the filename and filetype from the input file path
     filename, filetype = os.path.splitext(m_file)
-    filetype = filetype[1:]
-    # filename, filetype = m_file.split("/")[-1].split(".")
     ignore_pos = False
 
     # Use appropriate RDKit method for generating Molecule object from file
-    if filetype == "sdf":
+    if filetype == ".sdf":
         mols = Chem.SDMolSupplier(m_file, sanitize=False)
 
-    elif filetype == "pdb":
+    elif filetype == ".pdb":
         mols = [Chem.MolFromPDBFile(m_file, sanitize=False)]
 
-    elif filetype in ["ism", "smi", "cxsmiles"]:
+    elif filetype in [".ism", ".smi", ".cxsmiles"]:
         mols = Chem.SmilesMolSupplier(m_file, sanitize=False)
         ignore_pos = True
 
-    elif filetype == "mol2":
+    elif filetype == ".mol2":
         mols = [Chem.MolFromMol2File(m_file, sanitize=False)]
 
     # List to store individual PyG graph objects
@@ -279,7 +320,13 @@ def molfile2pyg(
 
     for m_i, m in enumerate(mols):
         # Convert each molecule to a PyG graph
-        mg = mol2pyg(m, ignore_pos, get_scaffold=get_scaffold)
+        mg = mol2pyg(
+            m,
+            ignore_pos,
+            get_scaffold=get_scaffold,
+            coords_only=coords_only,
+            source_idx=m_i,
+        )
         if mg is None:
             # Skip molecules that failed to convert
             continue
@@ -301,4 +348,6 @@ def molfile2pyg(
         return None
 
     # Create a batch of PyG Data objects
-    return Batch.from_data_list(mol_batch)
+    pyg_batch = Batch.from_data_list(mol_batch)
+    pyg_batch.source = m_file
+    return pyg_batch

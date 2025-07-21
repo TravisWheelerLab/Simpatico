@@ -1,8 +1,10 @@
 import torch
+from os import path
 import re
 import argparse
 from torch_geometric.utils import k_hop_subgraph, to_undirected
 from typing import List, Tuple, Optional
+from simpatico import config
 
 
 def to_onehot(value: any, vocabulary: List[any]) -> List[int]:
@@ -28,7 +30,7 @@ def get_k_hop_neighborhoods(atom_idx: int, max_k: int, ei: torch.Tensor) -> List
         max_k (int): Maximum number of hops to consider.
         ei (torch.Tensor): Edge index representing the graph.
     Returns:
-        List[List]: List of lists where each list contains the atom indices within each k-hop neighborhood.
+        List[List]: List of lists where each list contains the atom indices within each k-hop neighborhood. e.g. [[1-hop], [2-hop], ..., [k-hop]]
     """
     # Track all visited neighbors to avoid repeats, starting with target atom idx
     observed_neighbors = torch.tensor([atom_idx])
@@ -95,7 +97,14 @@ def get_k_hop_edges(edge_index: torch.Tensor, k: int = 3) -> torch.Tensor:
     )
 
 
-def get_mol2_coords(input_file):
+def get_mol2_coords(input_file) -> torch.Tensor:
+    """
+    Retrieves coordinate values from a .mol2 file.
+    Args:
+        input_file (str): path to .mol2 file
+    Returns:
+        (torch.Tensor): (N,3)-shaped tensor of XYZ coordinates.
+    """
     coord_pattern = re.compile(
         r"^\s*\d+\s+\S+\s+([-+]?\d*\.\d+|\d+)\s+([-+]?\d*\.\d+|\d+)\s+([-+]?\d*\.\d+|\d+)"
     )
@@ -109,19 +118,3 @@ def get_mol2_coords(input_file):
                 coord_list.append(xyz)
 
     return torch.tensor(coord_list)
-
-
-def get_xyz_from_file(input_file):
-    filetype = input_file.split(".")[-1]
-    if filetype == "mol2":
-        xyz_coords = get_mol2_coords(input_file)
-
-    return xyz_coords
-
-
-class SmartFormatter(argparse.HelpFormatter):
-    def _split_lines(self, text, width):
-        if text.startswith("R|"):
-            return text[2:].splitlines()
-        # this is the RawTextHelpFormatter._split_lines
-        return argparse.HelpFormatter._split_lines(self, text, width)

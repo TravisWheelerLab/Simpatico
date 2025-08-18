@@ -1,5 +1,5 @@
 import argparse
-from simpatico import train, evaluate, convert, get_train_set, query, print_results
+from simpatico import train, evaluate, convert, get_train_set, query, print_results, get_biolip_samples
 
 
 def main():
@@ -48,6 +48,11 @@ def main():
         "print-results", help="Print results from a query/virtual screen."
     )
     print_results.add_arguments(print_results_parser)
+
+    get_biolip_parser = subparsers.add_parser(
+        'get-biolip-samples', help='Generate training graph samples from the biolip database index and corresponding .pdb files.'
+    )
+    get_biolip_samples.add_arguments(get_biolip_parser)
 
     args = parser.parse_args()
 

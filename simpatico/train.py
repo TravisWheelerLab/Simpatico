@@ -138,7 +138,7 @@ def main(args):
 
     _, input_filetype = path.splitext(args.input)
 
-    if input_filetype == ".pkl":
+    if input_filetype in [".pkl", '.tv']:
         with open(args.input, "rb") as train_validate_data:
             train_data, validation_data = pickle.load(train_validate_data)
 

@@ -56,5 +56,5 @@ def main():
 
     args = parser.parse_args()
 
-    # invoke the main function from specified metho
+    # invoke the main function from specified method
     args.main(args)

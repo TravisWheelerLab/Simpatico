@@ -2,6 +2,8 @@ import torch
 from typing import Optional
 from torch.nn import SiLU, Sequential, Linear
 from torch_geometric.nn import GATv2Conv, knn, Sequential as PyG_Sequential
+import torch.nn as nn
+import torch.nn.functional as F
 
 
 class PositionalEdgeGenerator(torch.nn.Module):
@@ -48,6 +50,11 @@ class PositionalEdgeGenerator(torch.nn.Module):
         connections = knn(
             pos[x_subset], pos[y_subset], k, batch[x_subset], batch[y_subset]
         )
+
+        y_subset = y_subset.to(device)
+        x_subset = x_subset.to(device)
+        connections = connections.to(device)
+
         edge_index = torch.vstack(
             (y_subset[connections[0]], x_subset[connections[1]])
         ).to(device)
@@ -159,3 +166,93 @@ class ResBlock(torch.nn.Module):
             torch.Tensor: The output node feature matrix with shape [num_nodes, dims].
         """
         return self.res_block(x, ei, ea)
+
+
+class KVEncoder(nn.Module):
+    def __init__(self, in_dim=64, hidden_dim=128, heads=4, gnn_layers=2, edge_dim=1):
+        super().__init__()
+        self.heads = heads
+        self.head_dim = hidden_dim // heads
+
+        # GNN stack for graph A
+        convs = []
+        in_channels = in_dim
+        for _ in range(gnn_layers):
+            convs.append(
+                GATv2Conv(
+                    in_channels=in_channels,
+                    out_channels=hidden_dim,
+                    heads=4,
+                    edge_dim=edge_dim,
+                    concat=False
+                )
+            )
+            in_channels = hidden_dim
+        self.convs = nn.ModuleList(convs)
+
+        self.W_k = nn.Linear(hidden_dim, hidden_dim)
+        self.W_v = nn.Linear(hidden_dim, hidden_dim)
+
+    def forward(self, xA, edge_index, edge_attr):
+        h = xA
+        for conv in self.convs:
+            h = conv(h, edge_index, edge_attr)
+            h = F.elu(h)
+        K = self.W_k(h).view(h.size(0), self.heads, self.head_dim)
+        V = self.W_v(h).view(h.size(0), self.heads, self.head_dim)
+        return K, V
+
+
+class CrossGraphUpdater(nn.Module):
+    def __init__(self, in_dim=64, hidden_dim=128, heads=4, gnn_layers=2, edge_dim=3):
+        super().__init__()
+        self.heads = heads
+        self.head_dim = hidden_dim // heads
+        self.scale = self.head_dim ** -0.5
+
+        # GNN stack for graph B
+        convs = []
+        in_channels = in_dim
+        for _ in range(gnn_layers):
+            convs.append(
+                GATv2Conv(
+                    in_channels=in_channels,
+                    out_channels=hidden_dim,
+                    heads=1,
+                    edge_dim=edge_dim,
+                    concat=False
+                )
+            )
+            in_channels = hidden_dim
+        self.convs = nn.ModuleList(convs)
+
+        self.W_q = nn.Linear(hidden_dim, hidden_dim)
+        self.W_out = nn.Linear(hidden_dim, in_dim)
+
+    def forward(self, xB, edge_indexB, edge_attrB, K, V, batchB, batchA):
+        # GNN preprocessing for B
+        h = xB
+        for conv in self.convs:
+            h = conv(h, edge_indexB, edge_attrB)
+            h = F.elu(h)
+
+        # Queries from B
+        Q = self.W_q(h).view(h.size(0), self.heads, self.head_dim)
+
+        # Compute attention logits
+        attn_logits = torch.einsum("bhd,ahd->bha", Q, K) * self.scale
+
+        # Build batch mask [N_B, N_A]
+        # True if same batch id, else False
+        mask = batchB[:, None] == batchA[None, :]
+
+        # Apply mask: disallow attending across batches
+        attn_logits = attn_logits.masked_fill(~mask[:, None, :], float('-inf'))
+
+        attn = attn_logits.softmax(dim=-1)
+
+        # Weighted sum
+        out = torch.einsum("bha,ahd->bhd", attn, V)
+        out = out.reshape(h.size(0), -1)
+
+        return self.W_out(out)

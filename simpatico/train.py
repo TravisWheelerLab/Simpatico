@@ -15,6 +15,7 @@ from simpatico.models import MolEncoderDefaults, ProteinEncoderDefaults
 from typing import Callable
 
 
+
 def add_arguments(parser):
     parser.add_argument(
         "input",

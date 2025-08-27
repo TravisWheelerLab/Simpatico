@@ -97,12 +97,12 @@ class ProteinEncoder(torch.nn.Module):
             data.pocket_mask,
         )
 
+        device = x.device
+
         if data.batch is None:
-            batch = torch.zeros(len(x))
+            batch = torch.zeros(len(x)).to(device)
         else:
             batch = data.batch
-
-        device = x.device
 
         # Trim atoms that are excessively far from the voxel nodes.
         trimmed_atom_index = knn(

@@ -151,12 +151,19 @@ def get_xyz_from_file(input_file: str) -> torch.Tensor:
         (torch.Tensor): float-valued tensor of shape (N,3)
     """
     _, filetype = path.splitext(input_file)
+    xyz_coords = []
 
-    if filetype in config["molecule_filetypes"]:
-        mol_graph = molfile2pyg(input_file, coords_only=True)
-        xyz_coords = mol_graph.pos
+    if filetype == '.mol2':
+        xyz_coords = get_pos_from_mol2(input_file)
+
+    elif filetype in config["molecule_filetypes"]:
+        mols = molfile2rdkit(input_file)
+        for m in mols:
+            m_pos = get_mol_pos(m)
+            xyz_coords.append(m_pos)
+
+        xyz_coords = torch.vstack(xyz_coords)
     else:
-        xyz_coords = []
         with open(input_file) as pos_in:
             for line in pos_in:
                 line_content = [float(x.strip()) for x in line.split(",")]
@@ -171,7 +178,6 @@ def mol2pyg(
     ignore_pos: bool = False,
     removeHs: bool = True,
     get_scaffold=False,
-    coords_only=False,
     source_idx=None,
 ) -> Optional[Data]:
     """
@@ -215,8 +221,6 @@ def mol2pyg(
         # Get the 3D coordinates of atoms in the molecule
         pos = get_mol_pos(m)
 
-        if coords_only:
-            return Data(pos=pos)
 
     mol_atom_vocab = config.get("mol_atom_vocab")
 
@@ -281,25 +285,34 @@ def mol2pyg(
 
     return mol_graph
 
+def get_pos_from_mol2(input_file):
+    xyz = []
 
-def molfile2pyg(
-    m_file: str,
-    k: int = 3,
-    get_scaffold: bool = False,
-    coords_only=False,
-) -> Optional[Batch]:
-    """
-    Converts a molecular file (e.g., SDF, PDB) into a batch of molecular PyG graphs.
-    Args:
-        m_file (str): Path to the molecular file.
-        get_pos (bool): If True, 3D coordinates of atoms are included in the graph.
-        k (int): Maximum number of covalent bonds between two atoms for which edges are generated.
-    Returns:
-        Optional[Batch]: A batch of PyG Data objects, or None if conversion fails.
-    """
+    with open(input_file) as mol2_in:
+        pos_block = False
+        for line in mol2_in:
+            if line[:13] == '@<TRIPOS>ATOM':
+                pos_block = True
+                continue
+
+            if pos_block and line[0] == '@':
+                pos_block = False
+
+            if pos_block == False:
+                continue
+
+            line_content = re.split(r'\s+', line.strip())
+            
+            if line_content[1] == 'H':
+                continue
+                
+            xyz.append([float(x.strip()) for x in line_content[2:5]])
+
+    return torch.tensor(xyz)
+
+def molfile2rdkit(m_file):
     # Extract the filename and filetype from the input file path
     filename, filetype = os.path.splitext(m_file)
-    ignore_pos = False
 
     # Use appropriate RDKit method for generating Molecule object from file
     if filetype == ".sdf":
@@ -310,11 +323,30 @@ def molfile2pyg(
 
     elif filetype in [".ism", ".smi", ".cxsmiles"]:
         mols = Chem.SmilesMolSupplier(m_file, sanitize=False)
-        ignore_pos = True
 
     elif filetype == ".mol2":
         mols = [Chem.MolFromMol2File(m_file, sanitize=False)]
 
+    return mols
+
+
+def molfile2pyg(
+    m_file: str,
+    k: int = 3,
+    ignore_pos=False,
+    get_scaffold: bool = False,
+) -> Optional[Batch]:
+    """
+    Converts a molecular file (e.g., SDF, PDB) into a batch of molecular PyG graphs.
+    Args:
+        m_file (str): Path to the molecular file.
+        get_pos (bool): If True, 3D coordinates of atoms are included in the graph.
+        k (int): Maximum number of covalent bonds between two atoms for which edges are generated.
+    Returns:
+        Optional[Batch]: A batch of PyG Data objects, or None if conversion fails.
+    """
+    mols = molfile2rdkit(m_file)
+    
     # List to store individual PyG graph objects
     mol_batch = []
 
@@ -324,7 +356,6 @@ def molfile2pyg(
             m,
             ignore_pos,
             get_scaffold=get_scaffold,
-            coords_only=coords_only,
             source_idx=m_i,
         )
         if mg is None:

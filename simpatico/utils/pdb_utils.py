@@ -17,6 +17,8 @@ from rdkit.Chem.rdDetermineBonds import DetermineConnectivity
 
 
 
+
+
 def include_residues(protein_graph, selection):
     """
     Expands selection of protein atoms to include all atoms from residues with atoms in the selection. 
@@ -27,10 +29,20 @@ def include_residues(protein_graph, selection):
         (torch.tensor): updated 1D selection tensor to include all atoms from incident residues. 
     """
     residue_keys = torch.vstack((protein_graph.residue[selection], 
-                                 protein_graph.chain[selection])).T.unique(dim=0)
+                                 protein_graph.chain[selection]))
+
+    if protein_graph.batch is not None:
+        residue_keys = torch.vstack((residue_keys, protein_graph.batch[selection]))
+
+    residue_keys = residue_keys.T.unique(dim=0)
 
     all_keys = torch.vstack((protein_graph.residue, 
-                             protein_graph.chain)).T
+                             protein_graph.chain))
+    
+    if protein_graph.batch is not None:
+        all_keys = torch.vstack((all_keys, protein_graph.batch))
+    
+    all_keys = all_keys.T
 
     mask = (all_keys[:, None, :] == residue_keys[None, :, :]).all(dim=2) 
     matches = mask.any(dim=1) 

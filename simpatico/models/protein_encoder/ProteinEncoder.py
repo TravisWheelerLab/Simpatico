@@ -1,4 +1,5 @@
 import torch
+from simpatico.utils.pdb_utils import include_residues
 from simpatico.utils.model_utils import ResBlock, PositionalEdgeGenerator
 from simpatico.models import ProteinEncoderDefaults
 from torch_geometric.nn import GATv2Conv, Sequential
@@ -11,6 +12,7 @@ from torch_geometric.nn.pool import knn
 from copy import deepcopy
 import math
 import sys
+from simpatico import config
 
 
 class ProteinEncoder(torch.nn.Module):
@@ -41,9 +43,8 @@ class ProteinEncoder(torch.nn.Module):
         heads: int = 4,
         blocks: int = 6,
         block_depth: int = 2,
-        atom_k: int = 10,
-        atom_vox_k: int = 15,
-        vox_k: int = 15,
+        backbone_k: int = 20,
+        alpha_c_k: int = 20,
     ):
         # NAMING CONVENTION NOTE:
         # references to `vox` or `voxels` is a legacy convention from earlier versions of the model.
@@ -55,16 +56,14 @@ class ProteinEncoder(torch.nn.Module):
         adjusted_hidden_dim = hidden_dim * heads
 
         # Nonlinear functions to pass edges through.
-        self.atom_edge_MLP = PositionalEdgeGenerator(8)
-        self.atom_vox_edge_MLP = PositionalEdgeGenerator(8)
-        self.vox_edge_MLP = PositionalEdgeGenerator(8)
+        self.backbone_edge_MLP = PositionalEdgeGenerator(8)
+        self.residue_backbone_edge_MLP = PositionalEdgeGenerator(8)
+        self.alpha_carbon_edge_MLP = PositionalEdgeGenerator(8)
 
         # Nearest-neighbor count for atom-atom network
-        self.atom_k = atom_k
+        self.backbone_k = backbone_k 
         # Nearest-neighbor count for atom-voxel network
-        self.atom_vox_k = atom_vox_k
-        # Nearest-neighbor count for voxel-voxel network
-        self.vox_k = vox_k
+        self.alpha_c_k = alpha_c_k 
 
         self.atom_input_projection = torch.nn.Linear(feature_dim, adjusted_hidden_dim)
         self.vox_input_projection = torch.nn.Linear(feature_dim, adjusted_hidden_dim)
@@ -80,6 +79,8 @@ class ProteinEncoder(torch.nn.Module):
             torch.nn.ReLU(),
             torch.nn.Linear(adjusted_hidden_dim, out_dim),
         )
+        self.backbone_index = torch.tensor([config['atom_vocab'].index(w) for w in ['C','CA','N','O']])
+        self.alpha_c_index = config['atom_vocab'].index('CA')
 
     def forward(self, data):
         """
@@ -91,10 +92,11 @@ class ProteinEncoder(torch.nn.Module):
             (torch.Tensor): (N, 3) sized tensor corresponding to pocket-surface postions.
             (torch.Tensor): (N) sized tensor corresponding to pocket-surface postions.
         """
-        x, pos, pocket_mask = (
+        x, pos, pocket_mask, residue = (
             data.x.float(),
             data.pos,
             data.pocket_mask,
+            data.residue
         )
 
         if data.batch is None:
@@ -102,54 +104,66 @@ class ProteinEncoder(torch.nn.Module):
         else:
             batch = data.batch
 
+        residue_keys = torch.vstack((residue, batch)).T
+        _, residue_batch = torch.unique(residue_keys, dim=0, return_inverse=True)
+
         device = x.device
 
         # Trim atoms that are excessively far from the voxel nodes.
         trimmed_atom_index = knn(
-            pos, pos[pocket_mask], self.atom_vox_k, batch, batch[pocket_mask]
+            pos, pos[pocket_mask], 25, batch, batch[pocket_mask]
         )[1].unique()
 
-        atom_x = self.atom_input_projection(x[trimmed_atom_index])
+        trimmed_atom_index = include_residues(data, trimmed_atom_index)
+
+        x_trimmed = x[trimmed_atom_index] 
+        pocket_mask = pocket_mask[trimmed_atom_index]
         atom_pos = pos[trimmed_atom_index]
         atom_batch = batch[trimmed_atom_index]
+        residue_batch = residue_batch[trimmed_atom_index]
 
-        vox_x = self.vox_input_projection(x[pocket_mask])
-        vox_pos = pos[pocket_mask]
-        vox_batch = batch[pocket_mask]
+        atom_x = self.atom_input_projection(x_trimmed)
 
-        full_x = torch.vstack((atom_x, vox_x))
-        full_pos = torch.vstack((atom_pos, vox_pos))
-        full_batch = torch.hstack((atom_batch, vox_batch))
-
-        atom_node_index = torch.arange(atom_x.size(0)).to(device)
-        vox_node_index = (torch.arange(vox_x.size(0)) + atom_node_index.size(0)).to(
-            device
-        )
+        backbone_atoms = torch.where(x_trimmed[:, self.backbone_index].any(1))[0]
+        sidechain_atoms = torch.where(~x_trimmed[:, self.backbone_index].any(1))[0]
+        alpha_carbon_atoms = torch.where(x_trimmed[:, self.alpha_c_index])[0]
 
         edge_combos = [
-            (self.atom_edge_MLP, [atom_node_index, atom_node_index, self.atom_k]),
-            (
-                self.atom_vox_edge_MLP,
-                [vox_node_index, atom_node_index, self.atom_vox_k],
-            ),
-            (self.vox_edge_MLP, [vox_node_index, vox_node_index, self.vox_k]),
+            (self.backbone_edge_MLP, [backbone_atoms, backbone_atoms, self.backbone_k]),
+            (self.alpha_carbon_edge_MLP, [alpha_carbon_atoms, alpha_carbon_atoms, self.alpha_c_k])
         ]
 
-        aa_edges, av_edges, vv_edges = [
-            f(full_pos, *edge_params, full_batch) for f, edge_params in edge_combos
+        sc_ca_edges = sidechain_to_alpha_carbon_edges(sidechain_atoms, alpha_carbon_atoms, residue_batch)
+        sc_ca_features = torch.ones(sc_ca_edges.size(1)).unsqueeze(1).to(device)
+
+        bb_edges, ac_edges  = [
+            f(atom_pos, *edge_params, atom_batch) for f, edge_params in edge_combos
         ]
 
-        full_edge_index = torch.hstack((aa_edges[0], av_edges[0], vv_edges[0])).to(
+        full_edge_index = torch.hstack((bb_edges[0], ac_edges[0], sc_ca_edges)).to(
             device
         )
-        full_edge_attr = torch.vstack((aa_edges[1], av_edges[1], vv_edges[1])).to(
+        full_edge_attr = torch.vstack((bb_edges[1], ac_edges[1], sc_ca_features)).to(
             device
         )
 
-        rblock_outs = [full_x]
+        rblock_outs = [atom_x]
 
         for rblock in self.residual_blocks:
             rblock_outs.append(rblock(rblock_outs[-1], full_edge_index, full_edge_attr))
 
-        encoding = self.output_projection(torch.hstack(rblock_outs)[vox_node_index])
-        return (encoding, vox_pos, vox_batch)
+        encoding = self.output_projection(torch.hstack(rblock_outs)[pocket_mask])
+        return (encoding, atom_pos[pocket_mask], atom_batch[pocket_mask])
+
+def sidechain_to_alpha_carbon_edges(sidechain_atoms, alpha_carbons, residue_batch):
+    batch_a = residue_batch[sidechain_atoms]   # shape [len(index_a)]
+    batch_b = residue_batch[alpha_carbons]   # shape [len(index_b)]
+    
+    # broadcast compare
+    mask = batch_a[:, None] == batch_b[None, :]  # [len_a, len_b]
+    
+    # get all matching (a_idx, b_idx) pairs
+    a_idx, b_idx_rel = mask.nonzero(as_tuple=True)
+    edge_index = torch.stack([alpha_carbons[b_idx_rel], sidechain_atoms[a_idx]])
+
+    return edge_index

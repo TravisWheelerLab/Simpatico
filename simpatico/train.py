@@ -40,10 +40,10 @@ def add_arguments(parser):
     )
     parser.add_argument(
         "-l",
-        "--load_model",
+        "--load-model",
         help="Load previously trained weights",
     )
-    parser.add_argument("--epoch_start", type=int, default=1)
+    parser.add_argument("--epoch-start", type=int, default=1)
 
     parser.set_defaults(main=main)
     return parser
@@ -112,7 +112,7 @@ def training_step(
 
 
 def validate(
-    data_loader, protein_encoder, mol_encoder, difficulty_value, batch_size=16
+    data_loader, protein_encoder, mol_encoder, batch_size=16
 ):
     validation_loss_vals = []
 
@@ -123,7 +123,7 @@ def validate(
                     data_loader,
                     protein_encoder,
                     mol_encoder,
-                    difficulty_value,
+                    1,
                     prot_loss,
                 )
                 validation_loss_vals.append(loss)
@@ -156,7 +156,7 @@ def main(args):
 
     protein_encoder = ProteinEncoder(**ProteinEncoderDefaults).to(device)
     mol_encoder = MolEncoder(**MolEncoderDefaults).to(device)
-    get_hard_negative_difficulty = hard_negative_scheduler(50, 0.05)
+    get_hard_negative_difficulty = hard_negative_scheduler(50, 0.1)
 
     if args.load_model:
         protein_model_weights, mol_model_weights = torch.load(args.load_model)
@@ -167,7 +167,7 @@ def main(args):
         difficulty_value = get_hard_negative_difficulty(args.epoch_start)
 
         initial_validation_loss = validate(
-            validation_loader, protein_encoder, mol_encoder, difficulty_value
+            validation_loader, protein_encoder, mol_encoder
         )
         log_text(f"Best validation loss: {initial_validation_loss}")
 
@@ -184,7 +184,7 @@ def main(args):
 
         if best_validation_loss is None:
             best_validation_loss = validate(
-                validation_loader, protein_encoder, mol_encoder, difficulty_value
+                validation_loader, protein_encoder, mol_encoder
             )
 
         log_message = f"Epoch {epoch} difficulty: {difficulty_value}"
@@ -212,12 +212,13 @@ def main(args):
                 torch.cuda.empty_cache()
 
         epoch_validation_loss = validate(
-            validation_loader, protein_encoder, mol_encoder, difficulty_value
+            validation_loader, protein_encoder, mol_encoder
         )
 
         log_text(f"Epoch {epoch} validation loss: {epoch_validation_loss}")
 
         if epoch_validation_loss < best_validation_loss:
+            best_validation_loss = epoch_validation_loss
             torch.save(
                 [protein_encoder.state_dict(), mol_encoder.state_dict()],
                 args.weight_path,

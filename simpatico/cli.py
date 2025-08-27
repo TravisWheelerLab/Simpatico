@@ -1,5 +1,5 @@
 import argparse
-from simpatico import train, evaluate, convert, get_train_set, query, print_results, get_biolip_samples
+from simpatico import train, evaluate, convert, get_train_set, query, print_results, get_biolip_samples, decoy_eval
 
 
 def main():
@@ -53,6 +53,12 @@ def main():
         'get-biolip-samples', help='Generate training graph samples from the biolip database index and corresponding .pdb files.'
     )
     get_biolip_samples.add_arguments(get_biolip_parser)
+
+    decoy_eval_parser = subparsers.add_parser(
+        'decoy-eval', help='Evaluate trained model against decoy dataset.'
+    )
+    decoy_eval.add_arguments(decoy_eval_parser)
+
 
     args = parser.parse_args()
 

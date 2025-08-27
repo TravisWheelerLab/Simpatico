@@ -114,28 +114,10 @@ def pdb2pyg(pdb_path, ligand_pos=None, pocket_coords=None) -> Data:
         x, pos, chain, res_number = get_atom_features(atom)
 
         graph_x.append(x)
-        graph_pos.append(pos)
+        graph_pos.append(list(pos))
         chain_vals.append(chain)
         res_numbers.append(res_number)
 
-    
-    # with open(pdb_path) as pdb_in:
-    #     for line in pdb_in:
-    #         # Only interested in ATOM lines
-    #         if line[0:4] == "ATOM":
-    #             # Skip hydrogens.
-    #             if re.match(r"^(\d+H|H)", line[12:16].strip()):
-    #                 continue
-    #             if line[76:78].strip() == "H":
-    #                 continue
-    #             else:
-    #                 x, pos, chain, res_number = get_pdb_line_data(line)
-    #                 x, pos, chain, res_number = get_atom_features(atom)
-    #                 graph_x.append(x)
-    #                 graph_pos.append(pos)
-    #                 chain_vals.append(chain)
-    #                 res_numbers.append(res_number)
-    
     unique_chain_vals = list(set(chain_vals))
     chain_vals = [unique_chain_vals.index(x) for x in chain_vals]
 

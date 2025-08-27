@@ -81,7 +81,10 @@ class VectorDatabase:
 
         # Iterate through inputs and consolidate batch values across files.
         for ef_i, embed_file in enumerate(embed_files):
-            g = torch.load(embed_file, weights_only=False)
+            if isinstance(embed_file, str):
+                g = torch.load(embed_file, weights_only=False)
+            else:
+                g = embed_file
 
             self.sources.append(g.source)
             vectors.append(g.x)
@@ -134,12 +137,13 @@ class VectorDatabase:
         """
 
         # We need a unique maximum distance and quantile score value for each item in the VectorDatabase.
-        item_max_D = torch.zeros(self.item_batch[-1] + 1)
-        item_thresholds = torch.zeros_like(item_max_D)
+        device = vector_db.vectors.device
+        item_max_D = torch.zeros(self.item_batch[-1] + 1).to(device)
+        item_thresholds = torch.zeros_like(item_max_D).to(device)
 
         for _ in range(n_trials):
-            r_idx = torch.randperm(len(vector_db.vectors))[:n_random]
-            random_vecs = vector_db.vectors[r_idx]
+            r_idx = torch.randperm(len(vector_db.vectors))[:n_random].to(device)
+            random_vecs = vector_db.vectors[r_idx].to(device)
 
             for item_index in torch.arange(len(item_max_D)):
                 item_vectors = self.vectors[self.item_batch == item_index]
@@ -190,21 +194,25 @@ class VectorDatabase:
             I (np.array): neighbor-vector indices corresponding to values in D.
             query_db (VectorDatabase): VectorDB used as query.
         """
-        D = torch.as_tensor(D)
-        I = torch.as_tensor(I)
+        device = query_db.vectors.device
+
+        D = torch.as_tensor(D).to(device)
+        I = torch.as_tensor(I).to(device)
+        
 
         score_thresholds = query_db.score_thresholds
         target_batch = query_db.item_batch
+        
 
         max_D = score_thresholds[0][target_batch].unsqueeze(1)
         threshold_S = score_thresholds[1][target_batch].unsqueeze(1)
-
+        
         # Score value calculated so that the smaller the vector distance, the greater the score.
         S = torch.clamp(max_D.unsqueeze(1) - D - threshold_S.unsqueeze(1), min=0)
-
+        
         # get index of VectorDatabase item, rather than index of individual vectors.
         mol_I = self.item_batch[I].long()
-
+        
         target_mol_scores = []
 
         for t_i in target_batch.unique():

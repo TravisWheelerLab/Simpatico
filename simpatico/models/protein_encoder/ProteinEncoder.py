@@ -99,8 +99,10 @@ class ProteinEncoder(torch.nn.Module):
             data.residue
         )
 
+        device = x.device
+
         if data.batch is None:
-            batch = torch.zeros(len(x))
+            batch = torch.zeros(len(x)).to(device)
         else:
             batch = data.batch
 

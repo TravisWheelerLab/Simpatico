@@ -1,4 +1,5 @@
 import argparse
+from tqdm import tqdm
 from pathlib import Path
 import torch
 import sys
@@ -6,16 +7,15 @@ from glob import glob
 from os import path
 from simpatico import config
 from simpatico.utils.pdb_utils import pdb2pyg
-from simpatico.utils.mol_utils import molfile2pyg
+from simpatico.utils.mol_utils import molfile2pyg, get_xyz_from_file
 
 
 def add_arguments(parser):
     parser.add_argument(
-        "-i",
-        "--input",
+        "input",
         help='List of file paths or quote-bound unix-style path (e.g. "/path/to/data/*.pdb") describing input data.',
     )
-    parser.add_argument("-o", "--output_directory", required=True)
+    parser.add_argument("output_directory")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument(
         "-p",
@@ -29,7 +29,7 @@ def add_arguments(parser):
         action="store_true",
         help="convert input files to small molecule structures",
     )
-    group.add_argument(
+    parser.add_argument(
         "--suffix",
         default=None,
         help="optional suffix to insert between filename and extension in converted PyG files (file<suffix>.pyg)",
@@ -56,14 +56,20 @@ def gather_structure_files(input_string) -> list[str]:
     input_is_list = input_filetype not in structure_filetypes
 
     if input_is_list:
+        structure_files = []
         with open(input_string, "r") as structure_file_list:
             # filter out any length 0 lines from structure file list
-            structure_files = [
-                l for l in structure_file_list.read().splitlines() if len(l)
-            ]
+            for line in structure_file_list:
+                line = line.strip()
+                
+                if len(line) == 0:
+                    continue
+
+                structure_files.append([x.strip() for x in line.split(',')])
+
         return structure_files
     else:
-        return glob(input_string)
+        return [[x] for x in glob(input_string)]
 
 
 def new_filename(input_file, extension, output_dir, suffix=None):
@@ -94,7 +100,19 @@ def main(args):
 
     Path(args.output_directory).mkdir(parents=True, exist_ok=True)
 
-    for sf in structure_files:
+    for sf_row in tqdm(structure_files, desc='Converting structures:'):
+        sf = sf_row[0]
+        ligand_coords = None
+
+        if len(sf_row) > 1:
+            mol_file = sf_row[1]
+            ligand_coords = get_xyz_from_file(mol_file)
+
         pyg_file_out = new_filename(sf, ".pyg", args.output_directory, args.suffix)
-        pyg_graph = converter(sf)
+
+        if ligand_coords is not None:
+            pyg_graph = converter(sf, ligand_pos=ligand_coords)
+        else:
+            pyg_graph = converter(sf)
+
         torch.save(pyg_graph, pyg_file_out)

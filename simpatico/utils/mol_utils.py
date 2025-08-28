@@ -1,4 +1,5 @@
 import re
+import pickle
 from os import path
 import sys
 import os
@@ -151,6 +152,11 @@ def get_xyz_from_file(input_file: str) -> torch.Tensor:
         (torch.Tensor): float-valued tensor of shape (N,3)
     """
     _, filetype = path.splitext(input_file)
+
+    if filetype == '.pyg':
+        with open(input_file, 'rb') as graph_in:
+            g = pickle.load(graph_in)
+            return g.pos
 
     if filetype in config["molecule_filetypes"]:
         mol_graph = molfile2pyg(input_file, coords_only=True)

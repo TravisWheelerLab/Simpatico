@@ -16,30 +16,8 @@ from rdkit.Chem.rdDetermineBonds import DetermineConnectivity
 
 
 
-
-def include_residues(protein_graph, selection):
-    """
-    Expands selection of protein atoms to include all atoms from residues with atoms in the selection. 
-    Args:
-        protein_graph (PyG Graph): PyG graph of protein/pocket.
-        selection (torch.tensor): 1D tensor of selected atoms from protein_graph.
-    Returns:
-        (torch.tensor): updated 1D selection tensor to include all atoms from incident residues. 
-    """
-    residue_keys = torch.vstack((protein_graph.residue[selection], 
-                                 protein_graph.chain[selection])).T.unique(dim=0)
-
-    all_keys = torch.vstack((protein_graph.residue, 
-                             protein_graph.chain)).T
-
-    mask = (all_keys[:, None, :] == residue_keys[None, :, :]).all(dim=2) 
-    matches = mask.any(dim=1) 
-    indices = torch.nonzero(matches, as_tuple=True)[0]
-    return indices
-
 def trim_protein_graph(protein_graph, target_pos, r=12.5):
     proximal_atoms = radius(target_pos, protein_graph.pos, 12.5)[0].unique()
-    proximal_atoms = include_residues(protein_graph, proximal_atoms)
 
     protein_graph.x = protein_graph.x[proximal_atoms]
     protein_graph.pos = protein_graph.pos[proximal_atoms]

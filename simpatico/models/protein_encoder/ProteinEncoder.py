@@ -12,6 +12,7 @@ from copy import deepcopy
 import math
 import sys
 from torch_geometric.data import Data
+from torch_geometric.utils import dropout_edge
 
 
 
@@ -71,17 +72,39 @@ class ProteinEncoder(torch.nn.Module):
         self.atom_input_projection = torch.nn.Linear(feature_dim, adjusted_hidden_dim)
         self.vox_input_projection = torch.nn.Linear(feature_dim, adjusted_hidden_dim)
         self.residual_blocks = torch.nn.ModuleList(
-            [
-                ResBlock(hidden_dim, heads, block_depth, edge_dim=1)
-                for _ in range(blocks)
-            ]
-        )
+                    [
+                        ResBlock(
+                            hidden_dim,
+                            heads,
+                            block_depth,
+                            edge_dim=1,
+                            # You might need to update ResBlock to accept/pass 'norm' arg
+                            # or hardcode LayerNorm inside ResLayer as done above
+                        )
+                        for _ in range(blocks)
+                    ]
+                )
+        # self.residual_blocks = torch.nn.ModuleList(
+        #     [
+        #         ResBlock(hidden_dim, heads, block_depth, edge_dim=1)
+        #         for _ in range(blocks)
+        #     ]
+        # )
+
+        input_feat_size = (blocks + 1) * adjusted_hidden_dim
 
         self.output_projection = torch.nn.Sequential(
-            torch.nn.Linear((blocks + 1) * adjusted_hidden_dim, adjusted_hidden_dim),
+            torch.nn.LayerNorm(input_feat_size), # ADDED: Normalize concatenated features
+            torch.nn.Linear(input_feat_size, adjusted_hidden_dim),
             torch.nn.ReLU(),
+            torch.nn.Dropout(0.1), # ADDED: Dropout before final classification
             torch.nn.Linear(adjusted_hidden_dim, out_dim),
         )
+        # self.output_projection = torch.nn.Sequential(
+        #     torch.nn.Linear((blocks + 1) * adjusted_hidden_dim, adjusted_hidden_dim),
+        #     torch.nn.ReLU(),
+        #     torch.nn.Linear(adjusted_hidden_dim, out_dim),
+        # )
 
     def forward(self, data):
         """
@@ -147,6 +170,20 @@ class ProteinEncoder(torch.nn.Module):
         full_edge_attr = torch.vstack((aa_edges[1], av_edges[1], vv_edges[1])).to(
             device
         )
+
+        # ==================================================================
+        #  DROPEDGE IMPLEMENTATION
+        # ==================================================================
+        if self.training:
+            # p=0.2 means 20% of edges are removed randomly
+            full_edge_index, edge_mask = dropout_edge(
+                edge_index=full_edge_index,
+                p=0.2,
+                force_undirected=False,
+                training=True
+            )
+            full_edge_attr = full_edge_attr[edge_mask]
+        # ==================================================================
 
         rblock_outs = [full_x]
 

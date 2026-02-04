@@ -187,7 +187,7 @@ def validate(
                     prot_loss,
                 )
                 screen_test.add(*embed_data)
-                validation_loss_vals.append(loss)
+                validation_loss_vals.append(loss.item())
 
     epoch_acc = screen_test.run()
     return sum(validation_loss_vals) / len(validation_loss_vals), epoch_acc
@@ -267,6 +267,9 @@ def main(args):
         protein_model_weights, mol_model_weights = torch.load(weights_file_template % 'CURRENT')
         protein_encoder.load_state_dict(protein_model_weights)
         mol_encoder.load_state_dict(mol_model_weights)
+    else:
+        with open(output_file, 'w') as log_out:
+            True
 
     difficulty_value = get_hard_negative_difficulty(epoch_start)
 

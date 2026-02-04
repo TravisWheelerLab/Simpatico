@@ -46,11 +46,11 @@ def add_arguments(parser):
         help="Device to use for training",
     )
     parser.add_argument("-o", "--output-file")
-    parser.add_argument('-w', '--weights', 
-                        type=str, 
+    parser.add_argument('-w', '--weights',
+                        type=str,
                         help='Path to the weights file')
 
-    parser.add_argument('-t', '--encoder-types', 
+    parser.add_argument('-t', '--encoder-types',
                         choices=['pm', 'mp', 'mm', 'pp'],
                         help="query-database model types, e.g. pm = protein-molecule (required if --weights is used)")
 
@@ -65,7 +65,7 @@ def add_arguments(parser):
                         action='store_true',
                         help='Collapse all database files to a single FAISS vector db.')
 
-    parser.add_argument('--results-file', type=str, 
+    parser.add_argument('--results-file', type=str,
                         help='The path for the singular results file (required if one-db is True).')
 
     parser.set_defaults(main=main)
@@ -82,7 +82,7 @@ def main(args):
     torch.set_grad_enabled(False)
     log_config = {'level': logging.INFO,
                   'format': '%(asctime)s - %(levelname)s - %(message)s',
-                  'force': True} 
+                  'force': True}
     if args.output_file:
         log_config['filename'] = args.output_file
     else:
@@ -151,7 +151,7 @@ def main(args):
 
         log.info(f"Successfully completed screen.")
 
-    else:    
+    else:
         for db_file in db_files:
             log.info(f'Starting {db_file}')
             db_filename = '.'.join(db_file.split('/')[-1].split('.')[:-1])

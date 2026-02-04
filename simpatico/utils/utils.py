@@ -1,4 +1,5 @@
 import torch
+import logging
 from os import path
 import re
 import argparse
@@ -118,3 +119,15 @@ def get_mol2_coords(input_file) -> torch.Tensor:
                 coord_list.append(xyz)
 
     return torch.tensor(coord_list)
+
+def get_logger(output_file, log_config = None):
+    if log_config is None:
+        log_config = {'level': logging.INFO,
+                    'format': '%(asctime)s |--| %(message)s',
+                    'force': True}
+
+    log_config['filename'] = output_file
+
+    logging.basicConfig(**log_config)
+    log = logging.getLogger(__name__)
+    return log

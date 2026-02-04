@@ -1,10 +1,13 @@
 import sys
+from glob import glob
+from pathlib import Path
 from os import path
 import pickle
 import argparse
 import torch
 from datetime import datetime
 from typing import List, Tuple, Optional
+from simpatico.utils.utils import get_logger
 from simpatico.utils.data_utils import (
     ProteinLigandDataLoader,
     TrainingOutputHandler,
@@ -16,8 +19,7 @@ from simpatico.models import MolEncoderDefaults, ProteinEncoderDefaults
 from typing import Callable
 from torch.nn import TripletMarginLoss
 import torch.nn.functional as F
-
-
+import json
 
 def add_arguments(parser):
     parser.add_argument(
@@ -25,35 +27,8 @@ def add_arguments(parser):
         type=str,
         help="Path to train-eval dataset",
     )
-    parser.add_argument("weight_path"),
-    parser.add_argument("-o", "--output", type=str, help="Model performance output")
-    parser.add_argument(
-        "-b", "--batch_size", type=int, default=16, help="Input batch size for training"
-    )
-    parser.add_argument(
-        "-e", "--epochs", type=int, default=100, help="Number of epochs to train"
-    )
-    parser.add_argument(
-        "-lr", "--learning_rate", type=float, default=0.0001, help="Learning rate"
-    )
-    parser.add_argument(
-        "--device",
-        type=str,
-        default="cuda" if torch.cuda.is_available() else "cpu",
-        help="Device to use for training",
-    )
-    parser.add_argument(
-        "-l",
-        "--load_model",
-        help="Path to previously trained weights",
-    )
-    parser.add_argument("--epoch_start", type=int, default=1)
-
     parser.set_defaults(main=main)
     return parser
-
-triplet_loss = TripletMarginLoss(margin=1.0, p=2, eps=1e-7)
-bce_loss = torch.nn.BCEWithLogitsLoss()
 
 def positive_margin_loss(anchors, positives, negatives, m=1.0, d=3):
     positive_distances = torch.norm(anchors - positives, dim=1)
@@ -72,17 +47,6 @@ def hard_negative_scheduler(target_epoch, target_difficulty):
         return 1 - (1 - target_difficulty) * d_modifier
 
     return scheduler
-
-
-def logger(output_path):
-    def log_text(message):
-        if output_path is not None:
-            with open(output_path, "a") as f_out:
-                f_out.write(f"{message}\n")
-        else:
-            print(message)
-
-    return log_text
 
 
 def training_step(
@@ -186,13 +150,13 @@ class ScreenTest:
         else:
             prot_batch_mod = self.prot_batch[-1][-1] + 1
             mol_batch_mod = self.mol_batch[-1][-1] + 1
-        
+
         prot_batch += prot_batch_mod
         mol_batch += mol_batch_mod
 
         self.prot_batch.append(prot_batch)
         self.mol_batch.append(mol_batch)
-    
+
     def run(self):
         prot_embeds = torch.vstack(self.prot_embeds)
         prot_batch = torch.hstack(self.prot_batch)
@@ -205,7 +169,7 @@ class ScreenTest:
         return acc.item()
 
 def validate(
-    data_loader, protein_encoder, mol_encoder, difficulty_value=1, batch_size=16 
+    data_loader, protein_encoder, mol_encoder, difficulty_value=1, batch_size=16
 ):
     validation_loss_vals = []
     screen_test = ScreenTest()
@@ -228,94 +192,111 @@ def validate(
     epoch_acc = screen_test.run()
     return sum(validation_loss_vals) / len(validation_loss_vals), epoch_acc
 
+def get_tv_sets(data, holdout_file):
+    with open(holdout_file) as f_in:
+        holdout_substrings = [x.strip() for x in f_in.readlines()]
+
+    holdout_index = []
+    for hs in holdout_substrings:
+        for i in range(len(data)):
+            if hs in data[i][0].name:
+                holdout_index.append(i)
+
+    train_data = []
+    validation_data = []
+
+    for idx in range(len(data)):
+        if idx in holdout_index:
+            validation_data.append(data[idx])
+        else:
+            train_data.append(data[idx])
+
+    return train_data, validation_data
+
 
 def main(args):
-    device = args.device
-    log_text = logger(args.output)
-    # Load data
+    with open(args.input) as json_f:
+        train_params = json.load(json_f)
 
-    _, input_filetype = path.splitext(args.input)
+    train_handle = train_params['train_handle']
+    weights_dir = Path(f"{train_params['output_dir']}/weights")
+    weights_dir.mkdir(exist_ok=True)
 
-    if input_filetype in [".pkl", '.tv']:
-        with open(args.input, "rb") as train_validate_data:
-            train_data, validation_samples = pickle.load(train_validate_data)
+    BATCH_SIZE = train_params['batch_size']
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    output_file = f"{train_params['output_dir']}/{train_handle}.o"
+    stats_file = f"{train_params['output_dir']}/{train_handle}_stats.pkl"
+    log = get_logger(output_file)
 
-    elif input_filetype == ".csv":
-        train_data, validation_samples = construct_tv_set(args.input)
+    with open(train_params['data_file'], "rb") as train_validate_data:
+        data_corpus = pickle.load(train_validate_data)
 
+    train_data, validation_samples = get_tv_sets(data_corpus, train_params['holdout_file'])
     validation_data = []
 
     g = torch.Generator()
     g.manual_seed(1234)
 
-    # reproducible randperm, only for this call
     for random_idx in torch.randperm(len(validation_samples), generator=g)[:200]:
         validation_data.append(validation_samples[random_idx])
 
-
-    if args.output is not None:
-        with open(args.output, "w"):
-            True
-
-    train_loader = ProteinLigandDataLoader(train_data, batch_size=args.batch_size)
+    train_loader = ProteinLigandDataLoader(train_data, batch_size=BATCH_SIZE)
     validation_loader = ProteinLigandDataLoader(
-        validation_data, batch_size=args.batch_size
+        validation_data, batch_size=BATCH_SIZE
     )
 
-    protein_encoder = ProteinEncoder(**ProteinEncoderDefaults).to(device)
-    mol_encoder = MolEncoder(**MolEncoderDefaults).to(device)
-    
+    protein_encoder = ProteinEncoder().to(device)
+    mol_encoder = MolEncoder().to(device)
+
     # Difficulty ratio value arrived at by observing that 0.05 works well for a batch size of 16.
-    difficulty_ratio = (0.05 * 16) / args.batch_size
+    difficulty_ratio = (0.05 * 16) / BATCH_SIZE
     get_hard_negative_difficulty = hard_negative_scheduler(50, difficulty_ratio)
+    weights_file_template = str(weights_dir / f"{train_handle}_%s.w")
+    train_stats = {
+        'train_loss': [],
+        'validation_loss': [],
+        'validation_accuracy': []
+    }
+    epoch_start = 1
 
-    if args.load_model:
-        protein_model_weights, mol_model_weights = torch.load(args.load_model)
+    if Path(stats_file).exists():
+        with open(stats_file, 'rb') as stats_in:
+            train_stats = pickle.load(stats_in)
 
+        epoch_start = len(train_stats['train_loss'])+1
+        protein_model_weights, mol_model_weights = torch.load(weights_file_template % 'CURRENT')
         protein_encoder.load_state_dict(protein_model_weights)
         mol_encoder.load_state_dict(mol_model_weights)
 
-        difficulty_value = get_hard_negative_difficulty(args.epoch_start)
-
-        initial_validation_loss, initial_acc = validate(
-            validation_loader, protein_encoder, mol_encoder
-        )
-        log_text(f"Best validation loss: {initial_validation_loss}, accuracy: {initial_acc}")
+    difficulty_value = get_hard_negative_difficulty(epoch_start)
 
     optimizer = torch.optim.AdamW(
         list(protein_encoder.parameters()) + list(mol_encoder.parameters()),
-        lr=args.learning_rate,
+        lr=train_params['learning_rate'],
     )
 
     prot_loss = True
-    best_validation_loss = None
-    best_accuracy = None
 
-    for epoch in range(args.epoch_start, args.epochs + 1):
-        log_text(f'Epoch {epoch} - {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}')
+    for epoch in range(epoch_start, train_params['epochs'] + 1):
         difficulty_value = get_hard_negative_difficulty(epoch)
+        log.info(f"Epoch {epoch} |--| difficulty: {difficulty_value}")
 
-        if best_validation_loss is None:
-            best_validation_loss, best_accuracy = validate(
-                validation_loader, protein_encoder, mol_encoder
-            )
+        epoch_loss_vals = []
+        batch_loss_vals = []
 
-        log_message = f"Epoch {epoch} difficulty: {difficulty_value}"
-        log_text(log_message)
-        loss_vals = []
-
-        for batch_idx in range(train_loader.size // args.batch_size):
+        for batch_idx in range(train_loader.size // BATCH_SIZE):
             prot_loss = not prot_loss
             loss, _ = training_step(
                 train_loader, protein_encoder, mol_encoder, difficulty_value, prot_loss
             )
 
-            loss_vals.append(loss)
+            batch_loss_vals.append(loss)
 
-            if batch_idx % 10 == 0:
-                loss_avg = torch.hstack(loss_vals).mean().item()
-                log_text(f"Epoch {epoch}, batch {batch_idx} loss: {loss_avg}")
-                loss_vals = []
+            if batch_idx % 100 == 0:
+                batch_loss_avg = torch.hstack(batch_loss_vals).mean().item()
+                log.info(f"Epoch {epoch}, batch {batch_idx} loss: {batch_loss_avg}")
+                batch_loss_vals = []
+                epoch_loss_vals.append(batch_loss_avg)
 
             loss.backward()
 
@@ -324,42 +305,29 @@ def main(args):
                 optimizer.zero_grad()
                 torch.cuda.empty_cache()
 
+        epoch_train_loss = torch.tensor(epoch_loss_vals).mean().item()
         epoch_validation_loss, epoch_acc = validate(
             validation_loader, protein_encoder, mol_encoder
         )
 
-        log_text(f"Epoch {epoch} validation loss: {epoch_validation_loss}, accuracy: {epoch_acc}")
+        log.info(f"Epoch {epoch} validation loss: {epoch_validation_loss}, accuracy: {epoch_acc}")
+        for k,v in zip(['train_loss', 'validation_loss', 'validation_accuracy'],
+                       [epoch_train_loss, epoch_validation_loss, epoch_acc]):
+            train_stats[k].append(v)
+
+        with open(stats_file, 'wb') as stats_out:
+            pickle.dump(train_stats, stats_out)
+
+        torch.save(
+            [protein_encoder.state_dict(), mol_encoder.state_dict()],
+            weights_file_template % "CURRENT"
+        )
 
         if epoch % 50 == 0:
-            split_weight_path = args.weight_path.split('.')
-            split_weight_path[-2] += f'_{epoch}'
-            current_weight_path = '.'.join(split_weight_path)
-
             torch.save(
                 [protein_encoder.state_dict(), mol_encoder.state_dict()],
-                current_weight_path
+                weights_file_template % f'e{epoch}'
             )
-
-
-        if epoch_acc > best_accuracy:
-            best_accuracy = epoch_acc
-
-            torch.save(
-                [protein_encoder.state_dict(), mol_encoder.state_dict()],
-                args.weight_path,
-            )
-
-            log_text(f"Weights updated")
-        else:
-            split_weight_path = args.weight_path.split('.')
-            split_weight_path[-2] += '_CURRENT'
-            current_weight_path = '.'.join(split_weight_path)
-
-            torch.save(
-                [protein_encoder.state_dict(), mol_encoder.state_dict()],
-                current_weight_path
-            )
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train")

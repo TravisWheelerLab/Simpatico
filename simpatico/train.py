@@ -174,6 +174,9 @@ def validate(
     validation_loss_vals = []
     screen_test = ScreenTest()
 
+    protein_encoder.eval()
+    mol_encoder.eval()
+
     batch_count = data_loader.size // batch_size
 
     for prot_loss in [True, False]:
@@ -286,6 +289,9 @@ def main(args):
 
         epoch_loss_vals = []
         batch_loss_vals = []
+
+        protein_encoder.train()
+        mol_encoder.train()
 
         for batch_idx in range(train_loader.size // BATCH_SIZE):
             prot_loss = not prot_loss

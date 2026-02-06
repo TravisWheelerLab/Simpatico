@@ -78,8 +78,7 @@ class MolEncoder(torch.nn.Module):
 
         # Project to final embedding
         encoding = self.output_projection_layer(concat_features)
-
-        return encoding
+        return torch.nn.functional.normalize(encoding, p=2, dim=1)
 
 # class MolEncoder(torch.nn.Module):
 #     """

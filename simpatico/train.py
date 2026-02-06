@@ -75,16 +75,27 @@ def training_step(
 
     anchor_samples, positive_samples, negative_samples = (
         output_handler.get_anchors_positives_negatives(
-            prot_anchor=prot_loss, difficulty=difficulty_value
+            # prot_anchor=prot_loss, difficulty=difficulty_value
+            prot_anchor=True, difficulty=difficulty_value
         )
     )
 
     anchor_samples = anchor_samples.repeat(negative_samples.size(0) // anchor_samples.size(0), 1)
     positive_samples = positive_samples.repeat(negative_samples.size(0) // positive_samples.size(0), 1)
 
-    loss = positive_margin_loss(anchor_samples, positive_samples, negative_samples)
+    # loss = positive_margin_loss(anchor_samples, positive_samples, negative_samples)
+    loss = contrastive_loss(anchor_samples, positive_samples)
     return loss, (protein_out.x, protein_out.batch, mol_out, molecule_batch.batch)
 
+def contrastive_loss(p_embeddings, l_embeddings, temperature=0.07):
+    # p_embeddings and l_embeddings are already normalized from ProjectionHead
+    logits = (p_embeddings @ l_embeddings.t()) / temperature
+
+    labels = torch.arange(logits.shape[0], device=logits.device)
+    loss_p = torch.nn.functional.cross_entropy(logits, labels)
+    loss_l = torch.nn.functional.cross_entropy(logits.t(), labels)
+
+    return (loss_p + loss_l) / 2
 
 def diag_ranks(D):
     """
@@ -179,18 +190,17 @@ def validate(
 
     batch_count = data_loader.size // batch_size
 
-    for prot_loss in [True, False]:
-        for batch_idx in range(batch_count):
-            with torch.no_grad():
-                loss, embed_data = training_step(
-                    data_loader,
-                    protein_encoder,
-                    mol_encoder,
-                    difficulty_value,
-                    prot_loss,
-                )
-                screen_test.add(*embed_data)
-                validation_loss_vals.append(loss.item())
+    for batch_idx in range(batch_count):
+        with torch.no_grad():
+            loss, embed_data = training_step(
+                data_loader,
+                protein_encoder,
+                mol_encoder,
+                difficulty_value,
+                True,
+            )
+            screen_test.add(*embed_data)
+            validation_loss_vals.append(loss.item())
 
     epoch_acc = screen_test.run()
     return sum(validation_loss_vals) / len(validation_loss_vals), epoch_acc
@@ -294,9 +304,9 @@ def main(args):
         mol_encoder.train()
 
         for batch_idx in range(train_loader.size // BATCH_SIZE):
-            prot_loss = not prot_loss
+            # prot_loss = not prot_loss
             loss, _ = training_step(
-                train_loader, protein_encoder, mol_encoder, difficulty_value, prot_loss
+                train_loader, protein_encoder, mol_encoder, difficulty_value, True
             )
 
             batch_loss_vals.append(loss)
@@ -308,11 +318,9 @@ def main(args):
                 epoch_loss_vals.append(batch_loss_avg)
 
             loss.backward()
-
-            if prot_loss:
-                optimizer.step()
-                optimizer.zero_grad()
-                torch.cuda.empty_cache()
+            optimizer.step()
+            optimizer.zero_grad()
+            torch.cuda.empty_cache()
 
         epoch_train_loss = torch.tensor(epoch_loss_vals).mean().item()
         epoch_validation_loss, epoch_acc = validate(

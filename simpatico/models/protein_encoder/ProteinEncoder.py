@@ -191,4 +191,6 @@ class ProteinEncoder(torch.nn.Module):
             rblock_outs.append(rblock(rblock_outs[-1], full_edge_index, full_edge_attr))
 
         encoding = self.output_projection(torch.hstack(rblock_outs)[vox_node_index])
+        encoding = torch.nn.functional.normalize(encoding, p=2, dim=1)
+
         return Data(x=encoding, pos=vox_pos, batch=vox_batch)

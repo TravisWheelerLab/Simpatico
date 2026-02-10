@@ -1,25 +1,28 @@
-import sys
-from glob import glob
-from pathlib import Path
-from os import path
-import pickle
 import argparse
-import torch
+import json
+import pickle
+import sys
 from datetime import datetime
-from typing import List, Tuple, Optional
-from simpatico.utils.utils import get_logger
+from glob import glob
+from os import path
+from pathlib import Path
+from typing import Callable, List, Optional, Tuple
+
+import torch
+import torch.nn.functional as F
+from torch.nn import TripletMarginLoss
+from torch_geometric.nn import radius
+
+from simpatico.get_train_set import construct_tv_set
+from simpatico.models import MolEncoderDefaults, ProteinEncoderDefaults
+from simpatico.models.molecule_encoder.MolEncoder import MolEncoder
+from simpatico.models.protein_encoder.ProteinEncoder import ProteinEncoder
 from simpatico.utils.data_utils import (
     ProteinLigandDataLoader,
     TrainingOutputHandler,
 )
-from simpatico.models.molecule_encoder.MolEncoder import MolEncoder
-from simpatico.models.protein_encoder.ProteinEncoder import ProteinEncoder
-from simpatico.get_train_set import construct_tv_set
-from simpatico.models import MolEncoderDefaults, ProteinEncoderDefaults
-from typing import Callable
-from torch.nn import TripletMarginLoss
-import torch.nn.functional as F
-import json
+from simpatico.utils.utils import get_logger
+
 
 def add_arguments(parser):
     parser.add_argument(
@@ -48,6 +51,88 @@ def hard_negative_scheduler(target_epoch, target_difficulty):
 
     return scheduler
 
+def contrastive_loss(
+    p_embeddings, l_embeddings,
+    p_coords, l_coords,
+    p_batch, l_batch,
+    temperature=0.07,
+    phys_dist_threshold=6.0,
+    structural_weight=1.0,
+    hard_negative_ratio=0.1
+):
+    device = p_embeddings.device
+    N = p_embeddings.shape[0]
+
+    # --- 1. Compute Logits & Distances ---
+    # Memory: O(N^2) - This is the bottleneck
+    logits = (p_embeddings @ l_embeddings.t()) / temperature
+    phys_dists = torch.cdist(p_coords, l_coords)
+
+    # --- 2. Create Masks (Boolean, Low Memory) ---
+    batch_mask = p_batch.unsqueeze(1) == l_batch.unsqueeze(0)
+    proximal_mask = phys_dists < phys_dist_threshold
+    eye_mask = torch.eye(N, device=device, dtype=torch.bool)
+
+    # Label for Cross Entropy (0, 1, 2, ... N)
+    labels = torch.arange(N, device=device)
+
+    # --- 3. Component 1: Structural Loss ---
+    # We apply the mask *directly* to the logits during the function call
+    # or via temporary modification to save memory, but cloning is safer for autograd.
+    # To save memory, we calculate the mask first.
+
+    # IGNORE: (Different Batch) OR (Proximal neighbors that aren't the diagonal)
+    # Using -1e9 instead of -inf for stability
+    struct_mask = (~batch_mask) | (proximal_mask & ~eye_mask)
+
+    # We use masked_fill on a clone (necessary for autograd)
+    # But we can reuse this clone if we are careful, or just pay the cost.
+    logits_struct = logits.masked_fill(struct_mask, -1e9)
+    loss_struct = F.cross_entropy(logits_struct, labels)
+
+    # --- 4. Component 2: Hard Batch Loss ---
+    # GOAL: Keep Diagonal + Top K Hardest Negatives from OTHER batches.
+
+    # Step A: Identify Hard Negatives
+    # We want to mine from 'logits', but we must ignore Same-Batch pairs.
+    # We use a temporary view or mask for topk.
+    # We DO NOT clone the whole matrix just for mining if we can help it.
+
+    # We want to mask OUT the batch_mask for mining.
+    # Instead of cloning, we can use the value -1e9 in a new tensor,
+    # or just accept one clone here.
+    mining_view = logits.masked_fill(batch_mask, -1e9)
+    hard_neg_k = int(logits.size(0) * hard_negative_ratio)
+
+    # Safety check: Ensure k is not larger than available samples
+    # If N is small, this prevents index errors
+    valid_k = min(hard_neg_k, N - 1)
+
+    if valid_k > 0:
+        # Get indices of the hardest negatives
+        # largest=True because these are logits (similarity)
+        _, hard_indices = torch.topk(mining_view, valid_k, dim=1)
+
+        # Create a boolean mask for these hard negatives
+        hard_mask = torch.zeros_like(batch_mask) # Bool tensor
+        hard_mask.scatter_(1, hard_indices, True)
+    else:
+        hard_mask = torch.zeros_like(batch_mask)
+
+    # Step B: Final Batch Logits
+    # We want to KEEP: Diagonal OR Hard Negatives
+    keep_mask = eye_mask | hard_mask
+    # Apply Mask: Everything NOT kept becomes -1e9
+    logits_batch = logits.masked_fill(~keep_mask, -1e9)
+
+    loss_batch = F.cross_entropy(logits_batch, labels)
+
+    random_mask = ((~batch_mask) & (~hard_mask)) | eye_mask
+    random_logits = logits.masked_fill(~random_mask, -1e9)
+
+    loss_random = F.cross_entropy(random_logits, labels)
+    return loss_batch + (structural_weight * loss_struct) + loss_random
+
 
 def training_step(
     data_loader, protein_encoder, mol_encoder, difficulty_value, prot_loss=True
@@ -64,38 +149,27 @@ def training_step(
     protein_out = protein_encoder(protein_batch)
     mol_out = mol_encoder(molecule_batch)
 
-    output_handler = TrainingOutputHandler(
-        protein_out.x,
-        protein_out.pos,
-        protein_out.batch,
-        mol_out,
-        molecule_batch.pos,
-        molecule_batch.batch,
-    )
+    p_index, m_index = radius(molecule_batch.pos, protein_out.pos, 4.0, molecule_batch.batch, protein_out.batch)
 
-    anchor_samples, positive_samples, negative_samples = (
-        output_handler.get_anchors_positives_negatives(
-            # prot_anchor=prot_loss, difficulty=difficulty_value
-            prot_anchor=True, difficulty=difficulty_value
-        )
-    )
-
-    anchor_samples = anchor_samples.repeat(negative_samples.size(0) // anchor_samples.size(0), 1)
-    positive_samples = positive_samples.repeat(negative_samples.size(0) // positive_samples.size(0), 1)
-
-    # loss = positive_margin_loss(anchor_samples, positive_samples, negative_samples)
-    loss = contrastive_loss(anchor_samples, positive_samples)
+    loss = contrastive_loss(protein_out.x[p_index],
+                            mol_out[m_index],
+                            protein_out.pos[p_index],
+                            molecule_batch.pos[m_index],
+                            protein_out.batch[p_index],
+                            molecule_batch.batch[m_index],
+                            hard_negative_ratio=difficulty_value
+                        )
     return loss, (protein_out.x, protein_out.batch, mol_out, molecule_batch.batch)
 
-def contrastive_loss(p_embeddings, l_embeddings, temperature=0.07):
-    # p_embeddings and l_embeddings are already normalized from ProjectionHead
-    logits = (p_embeddings @ l_embeddings.t()) / temperature
+# def contrastive_loss(p_embeddings, l_embeddings, temperature=0.07):
+#     # p_embeddings and l_embeddings are already normalized from ProjectionHead
+#     logits = (p_embeddings @ l_embeddings.t()) / temperature
 
-    labels = torch.arange(logits.shape[0], device=logits.device)
-    loss_p = torch.nn.functional.cross_entropy(logits, labels)
-    loss_l = torch.nn.functional.cross_entropy(logits.t(), labels)
+#     labels = torch.arange(logits.shape[0], device=logits.device)
+#     loss_p = torch.nn.functional.cross_entropy(logits, labels)
+#     loss_l = torch.nn.functional.cross_entropy(logits.t(), labels)
 
-    return (loss_p + loss_l) / 2
+#     return (loss_p + loss_l) / 2
 
 def diag_ranks(D):
     """
@@ -262,8 +336,7 @@ def main(args):
     mol_encoder = MolEncoder().to(device)
 
     # Difficulty ratio value arrived at by observing that 0.05 works well for a batch size of 16.
-    difficulty_ratio = (0.05 * 16) / BATCH_SIZE
-    get_hard_negative_difficulty = hard_negative_scheduler(50, difficulty_ratio)
+    get_hard_negative_difficulty = hard_negative_scheduler(25, 0.1)
     weights_file_template = str(weights_dir / f"{train_handle}_%s.w")
     train_stats = {
         'train_loss': [],
@@ -340,7 +413,7 @@ def main(args):
             weights_file_template % "CURRENT"
         )
 
-        if epoch % 50 == 0:
+        if epoch % 10 == 0:
             torch.save(
                 [protein_encoder.state_dict(), mol_encoder.state_dict()],
                 weights_file_template % f'e{epoch}'

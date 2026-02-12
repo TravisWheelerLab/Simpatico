@@ -1,13 +1,16 @@
-from typing import List, Optional, Callable, Tuple
-import torch.nn.functional as F
-import sys
 import os
-from torch_geometric.data import Batch, Data
-from torch_geometric.nn import radius, knn
+import sys
+from pathlib import Path
+from typing import Callable, List, Optional, Tuple
+
 import torch
+import torch.nn.functional as F
+from torch_geometric.data import Batch, Data
+from torch_geometric.nn import knn, radius
+
 from simpatico.utils import graph_utils
 from simpatico.utils.utils import get_k_hop_edges
-from pathlib import Path
+
 
 def concatenate_pyg_files(file_list):
     pyg_graphs = []
@@ -19,7 +22,7 @@ def concatenate_pyg_files(file_list):
         else:
             pyg_graphs.append(g)
 
-    pyg_batch = Batch.from_data_list(pyg_graphs)    
+    pyg_batch = Batch.from_data_list(pyg_graphs)
     return pyg_batch
 
 
@@ -104,6 +107,23 @@ class ProteinLigandDataLoader:
         self.size = len(self.proteins)
         self.batch_iterator = self.new_batch_iterator()
         self.set_proximal_atom_masks()
+
+    def get_random_ligand_batch(self, n, blacklist=None):
+        mol_batch = []
+        randperm = torch.randperm(len(self.proteins)).tolist()
+
+        for idx in randperm:
+            lig = self.ligands[idx]
+            if blacklist is not None:
+                if lig.ligand_id in blacklist:
+                   continue
+            mol_batch.append(lig)
+            if len(mol_batch) >= n:
+                break
+        return Batch.from_data_list(mol_batch)
+
+
+
 
     def new_batch_iterator(self):
         """
@@ -280,11 +300,11 @@ class TrainingOutputHandler:
         prot_actives = self.prot_actives.unique()
 
         mol_contacts, prot_contacts = radius(
-            self.protein_pos[prot_actives], 
-            self.mol_pos[mol_actives], 4, 
+            self.protein_pos[prot_actives],
+            self.mol_pos[mol_actives], 4,
             self.protein_batch[prot_actives],
             self.mol_batch[mol_actives]
-        ) 
+        )
 
         contact_map = torch.zeros((len(prot_actives), len(mol_actives)))
         contact_map[(prot_contacts, mol_contacts)] = 1
@@ -466,6 +486,3 @@ class TrainingOutputHandler:
             pos_neg_embeds[pos_neg_actives],
             pos_neg_embeds[all_negatives],
         )
-
-
-

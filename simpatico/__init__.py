@@ -1,12 +1,13 @@
-import json
-import os
 import importlib.resources as pkg_resources
-import warnings
+import json
 import logging
+import os
+import warnings
+
 from Bio import BiopythonWarning
 from Bio.PDB.PDBExceptions import PDBConstructionWarning
 
-# Suppress *only* PDBConstructionWarnings
+# Suppress *only* PDBCo.sum(), (~random_maskn[0s.sum()ructionWarnings
 warnings.filterwarnings("ignore", category=PDBConstructionWarning)
 
 # Suppress PyG warnings

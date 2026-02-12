@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
 import torch
+import torch.multiprocessing as mp
 import torch.nn.functional as F
 from torch.nn import TripletMarginLoss
 from torch_geometric.nn import radius
@@ -44,198 +45,157 @@ def positive_margin_loss(anchors, positives, negatives, m=1.0, d=3):
     return positive_loss.mean() + negative_loss.mean()
 
 
-def hard_negative_scheduler(start_difficulty, target_difficulty, target_epoch):
-    def scheduler(epoch):
-        difficulty_schedule = torch.linspace(start_difficulty, target_difficulty, target_epoch)
-        difficulty_idx = min(epoch-1, target_epoch-1)
-        return difficulty_schedule[difficulty_idx].item()
-
-    return scheduler
-
-class DynamicRankScheduler:
-    def __init__(self, start_ratio=1.0, max_ratio=1.0, min_ratio=0.005, decay_rate=0.99):
+class HardBatchScheduler:
+    def __init__(self, start_size=32, max_size=512, growth_factor=2, patience=100, target_metric=0.15):
         """
-        Adaptive scheduler that scales k_hard based on model performance.
-
         Args:
-            start_ratio: Initial hard_negative_ratio (e.g., 0.5 = 50% of external batch)
-            min_ratio:   The floor for the ratio (e.g., 0.005 = 0.5%)
-            decay_rate:  How fast we allow the ratio to drop (0.9 to 0.999)
+            start_size: Initial HARD_BATCH_SIZE (e.g., 32 molecules).
+            max_size: Maximum HARD_BATCH_SIZE (e.g., 512 molecules).
+            growth_factor: Multiplier for size increase (e.g., 2 -> doubles size).
+            patience: Number of batches with good metrics required to level up.
+            target_metric: The mean_rank value below which we consider the task 'solved'
+                           (0.0 = perfect top-1 rank, 1.0 = worst rank).
         """
-        self.current_ratio = start_ratio
-        self.max_ratio = max_ratio
-        self.min_ratio = min_ratio
-        self.decay_rate = decay_rate
+        self.current_size = start_size
+        self.max_size = max_size
+        self.growth_factor = growth_factor
+        self.patience = patience
+        self.target_metric = target_metric
+        self.win_streak = 0
 
-    def step(self, relative_rank):
+    def step(self, mean_rank_metric):
         """
-        Adjusts the hard_negative_ratio for the NEXT step based on
-        the current batch's mean rank and size M.
-
-        Args:
-            mean_rank: The average rank of the positive (0 = top 1, M = last).
-            current_M: The size of the external batch for this step.
+        Updates the schedule based on the latest loss metric.
+        Returns the new HARD_BATCH_SIZE.
         """
-
-        # 2. Determine the Ideal Ratio
-        # We want the ratio (k/M) to be roughly 2x the relative rank.
-        # Why 2x? To ensure the batch is large enough to include the rank
-        # plus a buffer of "easier" negatives for stability.
-        target_ratio = relative_rank * 2.0
-
-        # 3. Update Logic (Smooth Decay)
-        # We only want to decrease the ratio if the model is ready (target < current).
-        # We generally don't want to INCREASE ratio unless performance catastrophic collapsed.
-
-        if target_ratio < self.current_ratio:
-            # Smoothly decay towards the target
-            # New = (0.99 * Old) + (0.01 * Target)
-            self.current_ratio = (self.decay_rate * self.current_ratio) + \
-                                 ((1 - self.decay_rate) * target_ratio)
+        # Check if model is performing well (Rank is low/good)
+        if mean_rank_metric < self.target_metric:
+            self.win_streak += 1
         else:
-            # If model is struggling (rank spiked), boost ratio immediately to stabilize
-            # We move faster upwards (0.9 factor) to rescue training
-            self.current_ratio = (0.9 * self.current_ratio) + (0.1 * target_ratio)
+            self.win_streak = 0 # Reset if performance drops
 
-        # 4. Clamp
-        self.current_ratio = max(self.min_ratio, min(self.max_ratio, self.current_ratio))
+        # Level Up Mechanism
+        if self.win_streak >= self.patience:
+            old_size = self.current_size
+            self.current_size = int(self.current_size * self.growth_factor)
 
-        return self.current_ratio
+            # Cap at max
+            self.current_size = min(self.current_size, self.max_size)
+
+            if self.current_size > old_size:
+                print(f"\n[Curriculum] Level Up! Increased Hard Batch Size: {old_size} -> {self.current_size}")
+                self.win_streak = 0 # Reset streak for the new difficulty level
+
+        # return self.current_size
 
 def contrastive_loss(
     p_embeddings, l_embeddings,
     p_coords, l_coords,
     p_batch, l_batch,
-    hard_l_embeddings,       # External batch (guaranteed disjoint from p_batch)
+    hard_l_embeddings,
     temperature=0.07,
-    phys_dist_threshold=5.5,
-    hard_negative_ratio=0.1
+    phys_dist_threshold=6.0,
+    # Rank Window Params
+    window_size=1000,
+    rank_center_factor=0.8,
+    max_considered_rank=2048,
 ):
-    """
-    Computes a hybrid contrastive loss:
-    1. Structural: Local Batch (Intra-Molecule)
-    2. Random:     Local Batch (Inter-Molecule)
-    3. Hard:       External Batch (Inter-Molecule, Top-K mined)
-    """
     device = p_embeddings.device
     N = p_embeddings.shape[0]
-    M = hard_l_embeddings.shape[0]
+    M = hard_l_embeddings.shape[0] # Total Atoms in External Batch
 
-    # --- 1. Compute Local Logits & Masks (N x N) ---
-    # Used for Structural and Random loss (Local Batch)
-    logits_local = (p_embeddings @ l_embeddings.t()) / temperature
+    # --- DEFENSE 1: NaN Checks ---
+    if torch.isnan(p_embeddings).any():
+        raise ValueError("Critical: NaNs detected in p_embeddings!")
+
+    # --- DEFENSE 2: Force Float32 ---
+    with torch.cuda.amp.autocast(enabled=False):
+        p_f32 = p_embeddings.float()
+        l_f32 = l_embeddings.float()
+        hard_l_f32 = hard_l_embeddings.float()
+
+        # Normalize
+        p_f32 = F.normalize(p_f32, p=2, dim=1)
+        l_f32 = F.normalize(l_f32, p=2, dim=1)
+        hard_l_f32 = F.normalize(hard_l_f32, p=2, dim=1)
+
+        # 1. Compute Local Logits (FP32)
+        logits_local = (p_f32 @ l_f32.t()) / temperature
+
+        # 2. Compute External Logits (FP32)
+        logits_external = (p_f32 @ hard_l_f32.t()) / temperature
+
+    # --- Masks ---
     phys_dists = torch.cdist(p_coords, l_coords)
-
-    # Masks
-    batch_mask = p_batch.unsqueeze(1) == l_batch.unsqueeze(0)   # Same Molecule
-    proximal_mask = phys_dists < phys_dist_threshold            # Too Close
-    eye_mask = torch.eye(N, device=device, dtype=torch.bool)    # The Positive
-
-    # Labels for local cross entropy (0, 1, ..., N)
+    batch_mask = p_batch.unsqueeze(1) == l_batch.unsqueeze(0)
+    proximal_mask = phys_dists < phys_dist_threshold
+    eye_mask = torch.eye(N, device=device, dtype=torch.bool)
     labels_local = torch.arange(N, device=device)
 
     # ==============================================================================
-    # COMPONENT 1: Structural Loss (Local Batch)
-    # Goal: Contrast Atom vs Distant Atoms in SAME molecule
+    # COMPONENT 1: Structural Loss (Intra-Molecule)
     # ==============================================================================
-
-    # IGNORE: Inter-molecular (Different Batch) OR Proximal Neighbors (Too close)
-    # KEEP:   The Diagonal (True Positive) + Distant Intra-molecular atoms
     struct_mask = (~batch_mask) | (proximal_mask & ~eye_mask)
-
-    # Apply Mask (Set ignored to -1e9)
     logits_struct = logits_local.masked_fill(struct_mask, -1e9)
     loss_struct = F.cross_entropy(logits_struct, labels_local)
 
     # ==============================================================================
-    # COMPONENT 2: Random Loss (Local Batch)
-    # Goal: Contrast Atom vs Random Atoms in OTHER molecules
+    # COMPONENT 2: Balanced Inter-Molecular Loss (Hard Window + Random Buffer)
     # ==============================================================================
 
-    # IGNORE: Same-Batch atoms (Intra-molecular).
-    # KEEP:   The Diagonal (True Positive) + All Inter-molecular atoms (Background noise)
-    # (Note: We mask out batch_mask but explicitly keep eye_mask)
-    random_mask = batch_mask & (~eye_mask)
-
-    # Apply Mask
-    logits_random = logits_local.masked_fill(random_mask, -1e9)
-    loss_random = F.cross_entropy(logits_random, labels_local)
-
-    # ==============================================================================
-    # COMPONENT 3: Hard Loss (External Batch)
-    # Goal: Contrast Atom vs Hardest Atoms in EXTERNAL batch
-    # ==============================================================================
-
-    # A. Get the True Positives (from Local Batch)
-    # The "Answer Key" is the diagonal of the local logits.
-    # Shape: (N, 1)
+    # A. Positive Scores (Diagonal of Local)
     pos_logits = torch.diag(logits_local).unsqueeze(1)
 
-    # B. Compute External Logits (N x M)
-    # Since hard_l_embeddings has NO overlapping molecules, ALL are valid negatives.
-    # We do not need masks here.
-    logits_external = (p_embeddings @ hard_l_embeddings.t()) / temperature
+    # B. Hard Mining (Rank Window)
+    # Search Horizon: limited to 2048 atoms or total size M
+    limit_k = min(max_considered_rank, M)
+    sorted_logits, _ = torch.topk(logits_external, k=limit_k, dim=1)
 
-    # --- MEMORY SAFE RANK COMPUTATION ---
-    # Instead of: rank_counts = (logits_external > pos_logits).sum(dim=1).float()
-    # We process columns in chunks to avoid allocating the huge boolean matrix.
+    # Calculate Rank relative to Search Horizon
+    pos_expanded = pos_logits.expand(-1, limit_k)
+    rank_in_topk = (sorted_logits > pos_expanded).sum(dim=1)
 
-    N, M = logits_external.shape
-    rank_counts = torch.zeros(N, device=device)
+    # Determine Window Center
+    center_idx = (rank_in_topk.float() * rank_center_factor).long()
 
-    chunk_size = 1000  # Adjust based on memory (5000 columns at a time)
+    # Gather Indices
+    half_window = window_size // 2
+    offsets = torch.arange(-half_window, window_size - half_window, device=device)
+    gather_indices = (center_idx.unsqueeze(1) + offsets.unsqueeze(0)).clamp(min=0, max=limit_k-1)
 
-    with torch.no_grad():
-        for start_col in range(0, M, chunk_size):
-            end_col = min(start_col + chunk_size, M)
+    hard_window_logits = torch.gather(sorted_logits, 1, gather_indices)
 
-            # Slice the existing logits (No new allocation)
-            sub_logits = logits_external[:, start_col:end_col]
+    # D. Random Buffer (The Stabilizer)
+    # We sample exactly as many randoms as we have hard window samples to maintain 1:1 balance
+    rand_indices = torch.randint(0, M, (N, hard_window_logits.size(1)), device=device)
+    random_ext_logits = torch.gather(logits_external, 1, rand_indices)
 
-            # Compare and sum just this slice
-            # This creates a small temporary boolean mask (N x chunk_size)
-            chunk_matches = (sub_logits > pos_logits)
-
-            # Accumulate
-            rank_counts += chunk_matches.sum(dim=1).float()
-
-            # Delete temp vars explicitly to free graph memory immediately
-            del chunk_matches
-
-        mean_rank = rank_counts.mean().item()
-
-    # C. Mine Hard Negatives
-    # Calculate K based on the EXTERNAL batch size (M)
-    k_hard = int(M * hard_negative_ratio)
-    valid_k = max(1, min(k_hard, M))
-
-    # Get Top-K largest logits (hardest negatives)
-    # Shape: (N, K)
-    hard_neg_logits, _ = torch.topk(logits_external, valid_k, dim=1)
-
-    # D. Concatenate: [Positive, Hard Negatives]
-    # Shape: (N, 1 + K)
-    logits_hard_mining = torch.cat([pos_logits, hard_neg_logits], dim=1)
+    # Concatenate: [Positive, Hard_Window, Random_Buffer]
+    logits_final = torch.cat([pos_logits, hard_window_logits, random_ext_logits], dim=1)
 
     # E. Compute Loss
-    # The "correct" class is always index 0 (the first column)
     labels_hard = torch.zeros(N, device=device, dtype=torch.long)
-    loss_hard = F.cross_entropy(logits_hard_mining, labels_hard)
-    return loss_struct + loss_random + loss_hard, (mean_rank, M, loss_struct.item(), loss_random.item(), loss_hard.item())
+    loss_external = F.cross_entropy(logits_final, labels_hard)
 
+    # Metric: Normalized by limit_k (Search Horizon) to prevent "Success Illusion"
+    # 0.0 = Best possible rank
+    # 1.0 = Positive fell out of the search window (Curriculum Failure)
+    mean_rank = rank_in_topk.float().mean().item() / limit_k
+
+    return loss_struct + loss_external, (mean_rank, loss_struct.item(), loss_external.item())
 
 def training_step(
-    data_loader, protein_encoder, mol_encoder, difficulty_value, prot_loss=True
+    data_loader, protein_encoder, mol_encoder, hard_batch_scheduler, prot_loss=True
 ):
     device = next(protein_encoder.parameters()).device
 
     protein_batch, molecule_batch = data_loader.get_random_batch()
     protein_batch = protein_batch.clone()
-    protein_batch.pos += torch.randn_like(protein_batch.pos) * 0.05
+    protein_batch.pos += torch.randn_like(protein_batch.pos) * 0.5
 
     protein_batch = protein_batch.to(device)
     molecule_batch = molecule_batch.to(device)
-    random_ligand_batch = data_loader.get_random_ligand_batch(512, molecule_batch.ligand_id).to(device)
+    random_ligand_batch = data_loader.get_random_ligand_batch(hard_batch_scheduler.current_size, molecule_batch.ligand_id).to(device)
 
     protein_out = protein_encoder(protein_batch)
     mol_out = mol_encoder(molecule_batch)
@@ -250,7 +210,6 @@ def training_step(
                             protein_out.batch[p_index],
                             molecule_batch.batch[m_index],
                             hard_out,
-                            hard_negative_ratio=difficulty_value
                         )
     return loss, (protein_out.x, protein_out.batch, mol_out, molecule_batch.batch), loss_metrics
 
@@ -353,7 +312,6 @@ def validate(
                 data_loader,
                 protein_encoder,
                 mol_encoder,
-                difficulty_value,
                 True,
             )
             screen_test.add(*embed_data)
@@ -423,12 +381,11 @@ def main(args):
         'train_loss': [],
         'validation_loss': [],
         'validation_accuracy': [],
-        'mean_rank': []
+        'mean_rank': [],
+        'hn_batch_size': []
     }
     epoch_start = 1
-    current_ratio = 1
-    scheduler = DynamicRankScheduler(start_ratio=current_ratio, min_ratio=0.01)
-
+    hn_batch_size = 32
     if Path(stats_file).exists():
         with open(stats_file, 'rb') as stats_in:
             train_stats = pickle.load(stats_in)
@@ -437,11 +394,20 @@ def main(args):
         protein_model_weights, mol_model_weights = torch.load(weights_file_template % 'CURRENT')
         protein_encoder.load_state_dict(protein_model_weights)
         mol_encoder.load_state_dict(mol_model_weights)
-        current_ratio = train_stats['mean_rank'][-1]*2
-        scheduler = DynamicRankScheduler(start_ratio=train_stats['mean_rank'][-1]*2)
+        hn_batch_size = train_stats['hn_batch_size'][-1]
     else:
         with open(output_file, 'w') as log_out:
             True
+
+    # --- INITIALIZATION ---
+    # Start small (32) to let the model learn basic atomic identity.
+    batch_scheduler = HardBatchScheduler(
+        start_size=hn_batch_size,
+        max_size=512,
+        growth_factor=1.5, # Increase by 50% each time
+        patience=50,       # Require 50 stable batches before increasing
+        target_metric=0.10 # Target: Positive is in the top 10% of candidates
+    )
 
     optimizer = torch.optim.AdamW(
         list(protein_encoder.parameters()) + list(mol_encoder.parameters()),
@@ -458,9 +424,11 @@ def main(args):
 
         epoch_loss_vals = []
         epoch_rank_vals = []
+        epoch_hn_size = []
 
         batch_loss_vals = []
         batch_rank_vals = []
+        batch_hn_size = []
 
         protein_encoder.train()
         mol_encoder.train()
@@ -468,24 +436,30 @@ def main(args):
         for batch_idx in range(train_loader.size // BATCH_SIZE):
             # prot_loss = not prot_loss
             loss, _, loss_metrics = training_step(
-                train_loader, protein_encoder, mol_encoder, current_ratio, True
+                train_loader, protein_encoder, mol_encoder, batch_scheduler, True
             )
 
-            mean_rank, hard_neg_count = loss_metrics[:2]
-            current_ratio = scheduler.step(mean_rank / hard_neg_count)
+            mean_rank =  loss_metrics[0]
+            batch_scheduler.step(mean_rank)
 
             batch_loss_vals.append(loss)
-            batch_rank_vals.append(mean_rank / hard_neg_count)
+            batch_rank_vals.append(mean_rank)
+            batch_hn_size.append(batch_scheduler.current_size)
 
-            if batch_idx % 100 == 0:
+            if batch_idx % 10 == 0:
                 batch_loss_avg = torch.hstack(batch_loss_vals).mean().item()
                 batch_rank_avg = torch.tensor(batch_rank_vals).mean().item()
-                log.info(f"Epoch {epoch}, batch {batch_idx} loss: {batch_loss_avg}")
-                log.info(f"Mean rank: {batch_rank_avg}, Ratio: {current_ratio}")
+                batch_hn_avg = torch.tensor(batch_hn_size).float().mean().item()
+                log_string = "Epoch %s, batch %s loss: %s, Mean rank: %s, HN batch size: %s"
+                log.info(log_string % (epoch, batch_idx, round(batch_loss_avg,3), round(batch_rank_avg,3), round(batch_hn_avg,3)))
+
                 batch_loss_vals = []
                 batch_rank_vals = []
+                batch_hn_size = []
+
                 epoch_loss_vals.append(batch_loss_avg)
                 epoch_rank_vals.append(batch_rank_avg)
+                epoch_hn_size.append(batch_hn_avg)
 
             loss.backward()
             optimizer.step()
@@ -494,13 +468,19 @@ def main(args):
 
         epoch_train_loss = torch.tensor(epoch_loss_vals).mean().item()
         epoch_rank = torch.tensor(epoch_rank_vals).mean().item()
+        epoch_batch_size = torch.tensor(epoch_hn_size).mean().item()
+
+        epoch_loss_vals = []
+        epoch_rank_vals = []
+        epoch_hn_size = []
+
         epoch_validation_loss, epoch_acc = validate(
             validation_loader, protein_encoder, mol_encoder
         )
 
         log.info(f"Epoch {epoch} validation loss: {epoch_validation_loss}, accuracy: {epoch_acc}")
-        for k,v in zip(['train_loss', 'validation_loss', 'validation_accuracy', 'mean_rank'],
-                       [epoch_train_loss, epoch_validation_loss, epoch_acc, epoch_rank]):
+        for k,v in zip(['train_loss', 'validation_loss', 'validation_accuracy', 'mean_rank', 'hn_batch_size'],
+                       [epoch_train_loss, epoch_validation_loss, epoch_acc, epoch_rank, epoch_batch_size]):
             train_stats[k].append(v)
 
         with open(stats_file, 'wb') as stats_out:
@@ -518,6 +498,11 @@ def main(args):
             )
 
 if __name__ == "__main__":
+    # This MUST be the first thing that runs in your main block
+    try:
+        mp.set_start_method('spawn', force=True)
+    except RuntimeError:
+        pass # Context already set, which is fine
     parser = argparse.ArgumentParser(description="Train")
     add_arguments(parser)
     args = parser.parse_args()

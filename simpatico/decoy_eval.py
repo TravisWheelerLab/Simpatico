@@ -1,17 +1,20 @@
 # scripts/train.py
-from simpatico.utils.pdb_utils import pdb2pyg
-from simpatico.utils.mol_utils import get_xyz_from_file, molfile2pyg
+import argparse
+import logging
+import os
+import pickle
+
+import torch
+from torch_geometric.data import Batch, Data
+from torch_geometric.loader import DataLoader
+
+from simpatico import config
 from simpatico.models.molecule_encoder.MolEncoder import MolEncoder
 from simpatico.models.protein_encoder.ProteinEncoder import ProteinEncoder
 from simpatico.query import VectorDatabase
-import argparse
-from torch_geometric.loader import DataLoader
-from torch_geometric.data import Batch, Data
-import pickle
-import os
-from simpatico import config
-import torch
-import logging
+from simpatico.utils.mol_utils import get_xyz_from_file, molfile2pyg
+from simpatico.utils.pdb_utils import pdb2pyg
+
 
 def add_arguments(parser: argparse.ArgumentParser):
     parser.add_argument(
@@ -28,6 +31,7 @@ def add_arguments(parser: argparse.ArgumentParser):
         action="store_true",
         help="Just generate pyg graphs for future evaluations, don't actually perform evaluation.",
     )
+    parser.add_argument('--save-embeds', default=None)
     parser.add_argument(
         '-o',
         '--output-log'
@@ -56,17 +60,17 @@ def get_graph_dict(target_row):
 
     for f in target_row:
         gf = graph_version(f)
-        
+
         if os.path.exists(gf):
-            with open(gf, 'rb') as pkl_in: 
+            with open(gf, 'rb') as pkl_in:
                 graph_data[f] = pickle.load(pkl_in)
-    
+
     target_file, ligand_file, actives_file, decoys_file = target_row
 
     if graph_data[target_file] is None:
         ligand_coords = get_xyz_from_file(ligand_file)
         graph_data[target_file] = pdb2pyg(target_file, pocket_coords=ligand_coords)
-    
+
     for mol_file in [actives_file, decoys_file]:
         if graph_data[mol_file] is None:
             graph_data[mol_file] = molfile2pyg(mol_file, ignore_pos=True)
@@ -82,7 +86,7 @@ def save_graphs(graph_dict):
 
 def evaluate_mols(mol_graph, encoder, device):
     data_out = []
-    
+
     mol_loader = DataLoader(mol_graph, batch_size=1024, shuffle=False)
 
     for batch in mol_loader:
@@ -98,11 +102,11 @@ def evaluate_mols(mol_graph, encoder, device):
 def calculate_efs(rank_index, num_actives, num_total, sampling_ratios=[0.001, 0.005, 0.01, 0.05]):
     ef_vals = []
     expected_active_ratio = num_actives / num_total
-    
+
     for sr in sampling_ratios:
         sample_size = int(num_total * sr)
         sample = rank_index[:sample_size]
-        true_active_ratio = (sample < num_actives).sum() / sample_size 
+        true_active_ratio = (sample < num_actives).sum() / sample_size
         ef = true_active_ratio / expected_active_ratio
         ef_vals.append(ef.item())
 
@@ -114,7 +118,7 @@ def main(args):
     if args.output_log:
         log_config = {'level': logging.INFO,
                     'format': '%(asctime)s - %(levelname)s - %(message)s',
-                    'force': True} 
+                    'force': True}
 
         log_config['filename'] = args.output_log
 
@@ -136,7 +140,7 @@ def main(args):
         mol_encoder.eval()
 
     all_ef_results = []
-    
+
     for target_row in process_input_file(args.input_file):
         if log:
             log.info(f"Starting {target_row[0]}")
@@ -158,23 +162,29 @@ def main(args):
             protein_out = protein_encoder(target_graph)
             target_embeddings = protein_out.x
 
-            target_batch = Batch.from_data_list([Data(x=target_embeddings, source=target_graph.source)])        
+            target_batch = Batch.from_data_list([Data(x=target_embeddings, source=target_graph.source)])
 
-            if log: 
+            if log:
                 log.info('Starting eval.')
             active_embeddings = evaluate_mols(actives_graph, mol_encoder, device)
             active_embeddings.source = actives_graph.source
-            
+
             decoy_embeddings = evaluate_mols(decoys_graph, mol_encoder, device)
             decoy_embeddings.source = decoys_graph.source
 
             all_embeddings = Batch.from_data_list(active_embeddings.to_data_list() +
                                                   decoy_embeddings.to_data_list())
 
+            if args.save_embeds:
+                p_embed_f, _, a_embed_f, d_embed_f = [args.save_embeds + '_'.join(x.split('/')[-2:]) for x in target_row]
+                for e,f in zip([protein_out, active_embeddings, decoy_embeddings],
+                               [p_embed_f, a_embed_f, d_embed_f]):
+                    pickle.dump(e, open(f, 'wb'))
+
             target_db = VectorDatabase(target_batch)
             vector_db = VectorDatabase(all_embeddings)
 
-            if log: 
+            if log:
                 log.info('Completed eval.')
 
             target_db.get_score_thresholds(vector_db)
@@ -189,10 +199,10 @@ def main(args):
             print(target_row[0] + ', ' + ', '.join([f"{x:0.2f}" for x in ef_vals]))
             ef_avgs = torch.tensor([x[1] for x in all_ef_results]).mean(0).tolist()
 
-        
+
     if args.graphs_only == False:
         print('EF averages: ' + ', '.join([f"{x:0.2f}" for x in ef_avgs]))
-    
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(

@@ -56,7 +56,7 @@ class HardBatchScheduler:
             target_metric: The mean_rank value below which we consider the task 'solved'
                            (0.0 = perfect top-1 rank, 1.0 = worst rank).
         """
-        self.current_size = start_size
+        self.current_size = min(start_size, max_size)
         self.max_size = max_size
         self.growth_factor = growth_factor
         self.patience = patience
@@ -96,8 +96,8 @@ def contrastive_loss(
     temperature=0.07,
     phys_dist_threshold=6.0,
     # Rank Window Params
-    window_size=1000,
-    rank_center_factor=0.8,
+    window_size=100,
+    rank_center_factor=0.9,
     max_considered_rank=2048,
 ):
     device = p_embeddings.device
@@ -115,9 +115,9 @@ def contrastive_loss(
         hard_l_f32 = hard_l_embeddings.float()
 
         # Normalize
-        p_f32 = F.normalize(p_f32, p=2, dim=1)
-        l_f32 = F.normalize(l_f32, p=2, dim=1)
-        hard_l_f32 = F.normalize(hard_l_f32, p=2, dim=1)
+        # p_f32 = F.normalize(p_f32, p=2, dim=1)
+        # l_f32 = F.normalize(l_f32, p=2, dim=1)
+        # hard_l_f32 = F.normalize(hard_l_f32, p=2, dim=1)
 
         # 1. Compute Local Logits (FP32)
         logits_local = (p_f32 @ l_f32.t()) / temperature
@@ -167,11 +167,11 @@ def contrastive_loss(
 
     # D. Random Buffer (The Stabilizer)
     # We sample exactly as many randoms as we have hard window samples to maintain 1:1 balance
-    rand_indices = torch.randint(0, M, (N, hard_window_logits.size(1)), device=device)
-    random_ext_logits = torch.gather(logits_external, 1, rand_indices)
+    # rand_indices = torch.randint(0, M, (N, hard_window_logits.size(1)), device=device)
+    # random_ext_logits = torch.gather(logits_external, 1, rand_indices)
 
     # Concatenate: [Positive, Hard_Window, Random_Buffer]
-    logits_final = torch.cat([pos_logits, hard_window_logits, random_ext_logits], dim=1)
+    logits_final = torch.cat([pos_logits, hard_window_logits], dim=1)
 
     # E. Compute Loss
     labels_hard = torch.zeros(N, device=device, dtype=torch.long)
@@ -191,7 +191,7 @@ def training_step(
 
     protein_batch, molecule_batch = data_loader.get_random_batch()
     protein_batch = protein_batch.clone()
-    protein_batch.pos += torch.randn_like(protein_batch.pos) * 0.5
+    protein_batch.pos += torch.randn_like(protein_batch.pos) * 0.25
 
     protein_batch = protein_batch.to(device)
     molecule_batch = molecule_batch.to(device)
@@ -201,7 +201,7 @@ def training_step(
     mol_out = mol_encoder(molecule_batch)
     hard_out = mol_encoder(random_ligand_batch)
 
-    p_index, m_index = radius(molecule_batch.pos, protein_out.pos, 4.5, molecule_batch.batch, protein_out.batch)
+    p_index, m_index = radius(molecule_batch.pos, protein_out.pos, 4.0, molecule_batch.batch, protein_out.batch)
 
     loss, loss_metrics = contrastive_loss(protein_out.x[p_index],
                             mol_out[m_index],
@@ -296,7 +296,7 @@ class ScreenTest:
         return acc.item()
 
 def validate(
-    data_loader, protein_encoder, mol_encoder, difficulty_value=1, batch_size=16
+    data_loader, protein_encoder, mol_encoder, hard_batch_scheduler, difficulty_value=1, batch_size=16
 ):
     validation_loss_vals = []
     screen_test = ScreenTest()
@@ -312,6 +312,7 @@ def validate(
                 data_loader,
                 protein_encoder,
                 mol_encoder,
+                hard_batch_scheduler,
                 True,
             )
             screen_test.add(*embed_data)
@@ -403,9 +404,9 @@ def main(args):
     # Start small (32) to let the model learn basic atomic identity.
     batch_scheduler = HardBatchScheduler(
         start_size=hn_batch_size,
-        max_size=512,
+        max_size=162,
         growth_factor=1.5, # Increase by 50% each time
-        patience=50,       # Require 50 stable batches before increasing
+        patience=10,       # Require 50 stable batches before increasing
         target_metric=0.10 # Target: Positive is in the top 10% of candidates
     )
 
@@ -424,11 +425,9 @@ def main(args):
 
         epoch_loss_vals = []
         epoch_rank_vals = []
-        epoch_hn_size = []
 
         batch_loss_vals = []
         batch_rank_vals = []
-        batch_hn_size = []
 
         protein_encoder.train()
         mol_encoder.train()
@@ -444,22 +443,18 @@ def main(args):
 
             batch_loss_vals.append(loss)
             batch_rank_vals.append(mean_rank)
-            batch_hn_size.append(batch_scheduler.current_size)
 
-            if batch_idx % 10 == 0:
+            if batch_idx % 100 == 0:
                 batch_loss_avg = torch.hstack(batch_loss_vals).mean().item()
                 batch_rank_avg = torch.tensor(batch_rank_vals).mean().item()
-                batch_hn_avg = torch.tensor(batch_hn_size).float().mean().item()
                 log_string = "Epoch %s, batch %s loss: %s, Mean rank: %s, HN batch size: %s"
-                log.info(log_string % (epoch, batch_idx, round(batch_loss_avg,3), round(batch_rank_avg,3), round(batch_hn_avg,3)))
+                log.info(log_string % (epoch, batch_idx, round(batch_loss_avg,3), round(batch_rank_avg,3), batch_scheduler.current_size))
 
                 batch_loss_vals = []
                 batch_rank_vals = []
-                batch_hn_size = []
 
                 epoch_loss_vals.append(batch_loss_avg)
                 epoch_rank_vals.append(batch_rank_avg)
-                epoch_hn_size.append(batch_hn_avg)
 
             loss.backward()
             optimizer.step()
@@ -468,19 +463,16 @@ def main(args):
 
         epoch_train_loss = torch.tensor(epoch_loss_vals).mean().item()
         epoch_rank = torch.tensor(epoch_rank_vals).mean().item()
-        epoch_batch_size = torch.tensor(epoch_hn_size).mean().item()
-
         epoch_loss_vals = []
         epoch_rank_vals = []
-        epoch_hn_size = []
 
         epoch_validation_loss, epoch_acc = validate(
-            validation_loader, protein_encoder, mol_encoder
+            validation_loader, protein_encoder, mol_encoder, batch_scheduler
         )
 
         log.info(f"Epoch {epoch} validation loss: {epoch_validation_loss}, accuracy: {epoch_acc}")
         for k,v in zip(['train_loss', 'validation_loss', 'validation_accuracy', 'mean_rank', 'hn_batch_size'],
-                       [epoch_train_loss, epoch_validation_loss, epoch_acc, epoch_rank, epoch_batch_size]):
+                       [epoch_train_loss, epoch_validation_loss, epoch_acc, epoch_rank, batch_scheduler.current_size]):
             train_stats[k].append(v)
 
         with open(stats_file, 'wb') as stats_out:
@@ -491,7 +483,12 @@ def main(args):
             weights_file_template % "CURRENT"
         )
 
-        if epoch % 10 == 0:
+        if epoch >= 25 and epoch <= 50:
+            torch.save(
+                [protein_encoder.state_dict(), mol_encoder.state_dict()],
+                weights_file_template % f'e{epoch}'
+            )
+        elif epoch % 10 == 0:
             torch.save(
                 [protein_encoder.state_dict(), mol_encoder.state_dict()],
                 weights_file_template % f'e{epoch}'

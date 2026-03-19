@@ -34,6 +34,7 @@ def add_arguments(parser):
     parser.set_defaults(main=main)
     return parser
 
+
 def positive_margin_loss(anchors, positives, negatives, m=1.0, d=3):
     positive_distances = torch.norm(anchors - positives, dim=1)
     anchors = anchors.repeat(negatives.size(0) // anchors.size(0), 1)
@@ -46,7 +47,14 @@ def positive_margin_loss(anchors, positives, negatives, m=1.0, d=3):
 
 
 class HardBatchScheduler:
-    def __init__(self, start_size=32, max_size=512, growth_factor=2, patience=100, target_metric=0.15):
+    def __init__(
+        self,
+        start_size=32,
+        max_size=512,
+        growth_factor=2,
+        patience=100,
+        target_metric=0.15,
+    ):
         """
         Args:
             start_size: Initial HARD_BATCH_SIZE (e.g., 32 molecules).
@@ -72,7 +80,7 @@ class HardBatchScheduler:
         if mean_rank_metric < self.target_metric:
             self.win_streak += 1
         else:
-            self.win_streak = 0 # Reset if performance drops
+            self.win_streak = 0  # Reset if performance drops
 
         # Level Up Mechanism
         if self.win_streak >= self.patience:
@@ -83,15 +91,21 @@ class HardBatchScheduler:
             self.current_size = min(self.current_size, self.max_size)
 
             if self.current_size > old_size:
-                print(f"\n[Curriculum] Level Up! Increased Hard Batch Size: {old_size} -> {self.current_size}")
-                self.win_streak = 0 # Reset streak for the new difficulty level
+                print(
+                    f"\n[Curriculum] Level Up! Increased Hard Batch Size: {old_size} -> {self.current_size}"
+                )
+                self.win_streak = 0  # Reset streak for the new difficulty level
 
         # return self.current_size
 
+
 def contrastive_loss(
-    p_embeddings, l_embeddings,
-    p_coords, l_coords,
-    p_batch, l_batch,
+    p_embeddings,
+    l_embeddings,
+    p_coords,
+    l_coords,
+    p_batch,
+    l_batch,
     hard_l_embeddings,
     temperature=0.07,
     phys_dist_threshold=6.0,
@@ -102,7 +116,7 @@ def contrastive_loss(
 ):
     device = p_embeddings.device
     N = p_embeddings.shape[0]
-    M = hard_l_embeddings.shape[0] # Total Atoms in External Batch
+    M = hard_l_embeddings.shape[0]  # Total Atoms in External Batch
 
     # --- DEFENSE 1: NaN Checks ---
     if torch.isnan(p_embeddings).any():
@@ -161,7 +175,9 @@ def contrastive_loss(
     # Gather Indices
     half_window = window_size // 2
     offsets = torch.arange(-half_window, window_size - half_window, device=device)
-    gather_indices = (center_idx.unsqueeze(1) + offsets.unsqueeze(0)).clamp(min=0, max=limit_k-1)
+    gather_indices = (center_idx.unsqueeze(1) + offsets.unsqueeze(0)).clamp(
+        min=0, max=limit_k - 1
+    )
 
     hard_window_logits = torch.gather(sorted_logits, 1, gather_indices)
 
@@ -182,7 +198,12 @@ def contrastive_loss(
     # 1.0 = Positive fell out of the search window (Curriculum Failure)
     mean_rank = rank_in_topk.float().mean().item() / limit_k
 
-    return loss_struct + loss_external, (mean_rank, loss_struct.item(), loss_external.item())
+    return loss_struct + loss_external, (
+        mean_rank,
+        loss_struct.item(),
+        loss_external.item(),
+    )
+
 
 def training_step(
     data_loader, protein_encoder, mol_encoder, hard_batch_scheduler, prot_loss=True
@@ -195,23 +216,37 @@ def training_step(
 
     protein_batch = protein_batch.to(device)
     molecule_batch = molecule_batch.to(device)
-    random_ligand_batch = data_loader.get_random_ligand_batch(hard_batch_scheduler.current_size, molecule_batch.ligand_id).to(device)
+    random_ligand_batch = data_loader.get_random_ligand_batch(
+        hard_batch_scheduler.current_size, molecule_batch.ligand_id
+    ).to(device)
 
     protein_out = protein_encoder(protein_batch)
     mol_out = mol_encoder(molecule_batch)
     hard_out = mol_encoder(random_ligand_batch)
 
-    p_index, m_index = radius(molecule_batch.pos, protein_out.pos, 4.0, molecule_batch.batch, protein_out.batch)
+    p_index, m_index = radius(
+        molecule_batch.pos,
+        protein_out.pos,
+        4.0,
+        molecule_batch.batch,
+        protein_out.batch,
+    )
 
-    loss, loss_metrics = contrastive_loss(protein_out.x[p_index],
-                            mol_out[m_index],
-                            protein_out.pos[p_index],
-                            molecule_batch.pos[m_index],
-                            protein_out.batch[p_index],
-                            molecule_batch.batch[m_index],
-                            hard_out,
-                        )
-    return loss, (protein_out.x, protein_out.batch, mol_out, molecule_batch.batch), loss_metrics
+    loss, loss_metrics = contrastive_loss(
+        protein_out.x[p_index],
+        mol_out[m_index],
+        protein_out.pos[p_index],
+        molecule_batch.pos[m_index],
+        protein_out.batch[p_index],
+        molecule_batch.batch[m_index],
+        hard_out,
+    )
+    return (
+        loss,
+        (protein_out.x, protein_out.batch, mol_out, molecule_batch.batch),
+        loss_metrics,
+    )
+
 
 def diag_ranks(D):
     """
@@ -226,7 +261,9 @@ def diag_ranks(D):
 
     # create a mask where sorted_idx[row] == row
     row_idx = torch.arange(V, device=D.device)
-    mask = (sorted_idx == row_idx[:, None])  # [V, V], True at the diagonal element’s position
+    mask = (
+        sorted_idx == row_idx[:, None]
+    )  # [V, V], True at the diagonal element’s position
 
     # get the column index where True
     ranks = mask.nonzero(as_tuple=False)[:, 1]  # [V]
@@ -254,10 +291,9 @@ def batch_avg_cdist(A, B, A_batch, B_batch, V=None):
     sums = A_onehot.T @ D @ B_onehot
 
     # counts per (v_a, v_b)
-    counts = (A_onehot.sum(0)[:, None] * B_onehot.sum(0)[None, :])
+    counts = A_onehot.sum(0)[:, None] * B_onehot.sum(0)[None, :]
 
     return sums / counts
-
 
 
 class ScreenTest:
@@ -295,8 +331,14 @@ class ScreenTest:
         acc = 1 - (rankings.float().mean() / len(rankings))
         return acc.item()
 
+
 def validate(
-    data_loader, protein_encoder, mol_encoder, hard_batch_scheduler, difficulty_value=1, batch_size=16
+    data_loader,
+    protein_encoder,
+    mol_encoder,
+    hard_batch_scheduler,
+    difficulty_value=1,
+    batch_size=16,
 ):
     validation_loss_vals = []
     screen_test = ScreenTest()
@@ -320,6 +362,7 @@ def validate(
 
     epoch_acc = screen_test.run()
     return sum(validation_loss_vals) / len(validation_loss_vals), epoch_acc
+
 
 def get_tv_sets(data, holdout_file):
     with open(holdout_file) as f_in:
@@ -347,20 +390,22 @@ def main(args):
     with open(args.input) as json_f:
         train_params = json.load(json_f)
 
-    train_handle = train_params['train_handle']
+    train_handle = train_params["train_handle"]
     weights_dir = Path(f"{train_params['output_dir']}/weights")
     weights_dir.mkdir(exist_ok=True)
 
-    BATCH_SIZE = train_params['batch_size']
+    BATCH_SIZE = train_params["batch_size"]
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     output_file = f"{train_params['output_dir']}/{train_handle}.o"
     stats_file = f"{train_params['output_dir']}/{train_handle}_stats.pkl"
     log = get_logger(output_file)
 
-    with open(train_params['data_file'], "rb") as train_validate_data:
+    with open(train_params["data_file"], "rb") as train_validate_data:
         data_corpus = pickle.load(train_validate_data)
 
-    train_data, validation_samples = get_tv_sets(data_corpus, train_params['holdout_file'])
+    train_data, validation_samples = get_tv_sets(
+        data_corpus, train_params["holdout_file"]
+    )
     validation_data = []
 
     g = torch.Generator()
@@ -370,34 +415,34 @@ def main(args):
         validation_data.append(validation_samples[random_idx])
 
     train_loader = ProteinLigandDataLoader(train_data, batch_size=BATCH_SIZE)
-    validation_loader = ProteinLigandDataLoader(
-        validation_data, batch_size=BATCH_SIZE
-    )
+    validation_loader = ProteinLigandDataLoader(validation_data, batch_size=BATCH_SIZE)
 
     protein_encoder = ProteinEncoder().to(device)
     mol_encoder = MolEncoder().to(device)
 
     weights_file_template = str(weights_dir / f"{train_handle}_%s.w")
     train_stats = {
-        'train_loss': [],
-        'validation_loss': [],
-        'validation_accuracy': [],
-        'mean_rank': [],
-        'hn_batch_size': []
+        "train_loss": [],
+        "validation_loss": [],
+        "validation_accuracy": [],
+        "mean_rank": [],
+        "hn_batch_size": [],
     }
     epoch_start = 1
     hn_batch_size = 32
     if Path(stats_file).exists():
-        with open(stats_file, 'rb') as stats_in:
+        with open(stats_file, "rb") as stats_in:
             train_stats = pickle.load(stats_in)
 
-        epoch_start = len(train_stats['train_loss'])+1
-        protein_model_weights, mol_model_weights = torch.load(weights_file_template % 'CURRENT')
+        epoch_start = len(train_stats["train_loss"]) + 1
+        protein_model_weights, mol_model_weights = torch.load(
+            weights_file_template % "CURRENT"
+        )
         protein_encoder.load_state_dict(protein_model_weights)
         mol_encoder.load_state_dict(mol_model_weights)
-        hn_batch_size = train_stats['hn_batch_size'][-1]
+        hn_batch_size = train_stats["hn_batch_size"][-1]
     else:
-        with open(output_file, 'w') as log_out:
+        with open(output_file, "w") as log_out:
             True
 
     # --- INITIALIZATION ---
@@ -405,22 +450,21 @@ def main(args):
     batch_scheduler = HardBatchScheduler(
         start_size=hn_batch_size,
         max_size=162,
-        growth_factor=1.5, # Increase by 50% each time
-        patience=10,       # Require 50 stable batches before increasing
-        target_metric=0.10 # Target: Positive is in the top 10% of candidates
+        growth_factor=1.5,  # Increase by 50% each time
+        patience=10,  # Require 50 stable batches before increasing
+        target_metric=0.10,  # Target: Positive is in the top 10% of candidates
     )
 
     optimizer = torch.optim.AdamW(
         list(protein_encoder.parameters()) + list(mol_encoder.parameters()),
-        lr=train_params['learning_rate'],
+        lr=train_params["learning_rate"],
     )
 
     prot_loss = True
 
     # get_hard_negative_difficulty = hard_negative_scheduler(0.5, 0.01, 20)
 
-
-    for epoch in range(epoch_start, train_params['epochs'] + 1):
+    for epoch in range(epoch_start, train_params["epochs"] + 1):
         log.info(f"Epoch {epoch}")
 
         epoch_loss_vals = []
@@ -438,7 +482,7 @@ def main(args):
                 train_loader, protein_encoder, mol_encoder, batch_scheduler, True
             )
 
-            mean_rank =  loss_metrics[0]
+            mean_rank = loss_metrics[0]
             batch_scheduler.step(mean_rank)
 
             batch_loss_vals.append(loss)
@@ -447,8 +491,19 @@ def main(args):
             if batch_idx % 100 == 0:
                 batch_loss_avg = torch.hstack(batch_loss_vals).mean().item()
                 batch_rank_avg = torch.tensor(batch_rank_vals).mean().item()
-                log_string = "Epoch %s, batch %s loss: %s, Mean rank: %s, HN batch size: %s"
-                log.info(log_string % (epoch, batch_idx, round(batch_loss_avg,3), round(batch_rank_avg,3), batch_scheduler.current_size))
+                log_string = (
+                    "Epoch %s, batch %s loss: %s, Mean rank: %s, HN batch size: %s"
+                )
+                log.info(
+                    log_string
+                    % (
+                        epoch,
+                        batch_idx,
+                        round(batch_loss_avg, 3),
+                        round(batch_rank_avg, 3),
+                        batch_scheduler.current_size,
+                    )
+                )
 
                 batch_loss_vals = []
                 batch_rank_vals = []
@@ -470,36 +525,53 @@ def main(args):
             validation_loader, protein_encoder, mol_encoder, batch_scheduler
         )
 
-        log.info(f"Epoch {epoch} validation loss: {epoch_validation_loss}, accuracy: {epoch_acc}")
-        for k,v in zip(['train_loss', 'validation_loss', 'validation_accuracy', 'mean_rank', 'hn_batch_size'],
-                       [epoch_train_loss, epoch_validation_loss, epoch_acc, epoch_rank, batch_scheduler.current_size]):
+        log.info(
+            f"Epoch {epoch} validation loss: {epoch_validation_loss}, accuracy: {epoch_acc}"
+        )
+        for k, v in zip(
+            [
+                "train_loss",
+                "validation_loss",
+                "validation_accuracy",
+                "mean_rank",
+                "hn_batch_size",
+            ],
+            [
+                epoch_train_loss,
+                epoch_validation_loss,
+                epoch_acc,
+                epoch_rank,
+                batch_scheduler.current_size,
+            ],
+        ):
             train_stats[k].append(v)
 
-        with open(stats_file, 'wb') as stats_out:
+        with open(stats_file, "wb") as stats_out:
             pickle.dump(train_stats, stats_out)
 
         torch.save(
             [protein_encoder.state_dict(), mol_encoder.state_dict()],
-            weights_file_template % "CURRENT"
+            weights_file_template % "CURRENT",
         )
 
         if epoch >= 25 and epoch <= 50:
             torch.save(
                 [protein_encoder.state_dict(), mol_encoder.state_dict()],
-                weights_file_template % f'e{epoch}'
+                weights_file_template % f"e{epoch}",
             )
-        elif epoch % 10 == 0:
+        elif epoch % 5 == 0:
             torch.save(
                 [protein_encoder.state_dict(), mol_encoder.state_dict()],
-                weights_file_template % f'e{epoch}'
+                weights_file_template % f"e{epoch}",
             )
+
 
 if __name__ == "__main__":
     # This MUST be the first thing that runs in your main block
     try:
-        mp.set_start_method('spawn', force=True)
+        mp.set_start_method("spawn", force=True)
     except RuntimeError:
-        pass # Context already set, which is fine
+        pass  # Context already set, which is fine
     parser = argparse.ArgumentParser(description="Train")
     add_arguments(parser)
     args = parser.parse_args()

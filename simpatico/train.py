@@ -168,14 +168,16 @@ def contrastive_loss(
     # Calculate Rank relative to Search Horizon
     pos_expanded = pos_logits.expand(-1, limit_k)
     rank_in_topk = (sorted_logits > pos_expanded).sum(dim=1)
+    # Calculate Relative Rank as specified
+    relative_rank = rank_in_topk.float() / limit_k
 
-    # Determine Window Center
-    center_idx = (rank_in_topk.float() * rank_center_factor).long()
+    # Calculate Linear Window Start Index
+    # Maps [0, 1] to [0, limit_k - window_size]
+    start_indices = (relative_rank * (limit_k - window_size)).long()
 
-    # Gather Indices
-    half_window = window_size // 2
-    offsets = torch.arange(-half_window, window_size - half_window, device=device)
-    gather_indices = (center_idx.unsqueeze(1) + offsets.unsqueeze(0)).clamp(
+    # Generate the window indices for each row
+    offsets = torch.arange(window_size, device=device)
+    gather_indices = (start_indices.unsqueeze(1) + offsets.unsqueeze(0)).clamp(
         min=0, max=limit_k - 1
     )
 

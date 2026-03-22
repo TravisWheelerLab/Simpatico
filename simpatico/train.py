@@ -107,7 +107,7 @@ def contrastive_loss(
     p_batch,
     l_batch,
     hard_l_embeddings,
-    temperature=0.07,
+    temperature=0.2,
     phys_dist_threshold=6.0,
     # Rank Window Params
     window_size=100,

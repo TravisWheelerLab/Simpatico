@@ -100,23 +100,49 @@ class HardBatchScheduler:
 
 
 def contrastive_loss(
-    p_embeddings,
-    l_embeddings,
-    p_coords,
-    l_coords,
-    p_batch,
-    l_batch,
+    prot_x,
+    prot_pos,
+    prot_batch,
+    lig_x,
+    lig_pos,
+    lig_batch,
     hard_l_embeddings,
+    prot_anchor=True,
     temperature=0.2,
+    interaction_radius=4.0,
     phys_dist_threshold=6.0,
-    # Rank Window Params
     window_size=100,
-    rank_center_factor=0.9,
     max_considered_rank=2048,
 ):
-    device = p_embeddings.device
-    N = p_embeddings.shape[0]
-    M = hard_l_embeddings.shape[0]  # Total Atoms in External Batch
+    p_index, m_index = radius(
+        lig_pos,
+        prot_pos,
+        interaction_radius,
+        lig_batch,
+        prot_batch,
+    )
+    p_embeddings, p_coords, p_batch = (
+        prot_x[p_index],
+        prot_pos[p_index],
+        prot_batch[p_index],
+    )
+    l_embeddings, l_coords, l_batch = (
+        lig_x[m_index],
+        lig_pos[m_index],
+        lig_batch[m_index],
+    )
+
+    if prot_anchor:
+        a_embeddings, a_coords, a_batch = p_embeddings, p_coords, p_batch
+        s_embeddings, s_coords, s_batch = l_embeddings, l_coords, l_batch
+        M = hard_l_embeddings.shape[0]  # Total Atoms in External Batch
+    else:
+        a_embeddings, a_coords, a_batch = l_embeddings, l_coords, l_batch
+        s_embeddings, s_coords, s_batch = p_embeddings, p_coords, p_batch
+        M = s_embeddings.shape[0]  # Total Atoms in External Batch
+
+    device = prot_x.device
+    N = a_embeddings.shape[0]
 
     # --- DEFENSE 1: NaN Checks ---
     if torch.isnan(p_embeddings).any():
@@ -124,8 +150,8 @@ def contrastive_loss(
 
     # --- DEFENSE 2: Force Float32 ---
     with torch.cuda.amp.autocast(enabled=False):
-        p_f32 = p_embeddings.float()
-        l_f32 = l_embeddings.float()
+        a_f32 = a_embeddings.float()
+        s_f32 = s_embeddings.float()
         hard_l_f32 = hard_l_embeddings.float()
 
         # Normalize
@@ -134,14 +160,17 @@ def contrastive_loss(
         # hard_l_f32 = F.normalize(hard_l_f32, p=2, dim=1)
 
         # 1. Compute Local Logits (FP32)
-        logits_local = (p_f32 @ l_f32.t()) / temperature
+        logits_local = (a_f32 @ s_f32.t()) / temperature
 
         # 2. Compute External Logits (FP32)
-        logits_external = (p_f32 @ hard_l_f32.t()) / temperature
+        if prot_anchor:
+            logits_external = (p_embeddings @ hard_l_f32.t()) / temperature
+        else:
+            logits_external = (hard_l_f32 @ p_embeddings.t()) / temperature
 
     # --- Masks ---
-    phys_dists = torch.cdist(p_coords, l_coords)
-    batch_mask = p_batch.unsqueeze(1) == l_batch.unsqueeze(0)
+    phys_dists = torch.cdist(a_coords, s_coords)
+    batch_mask = a_batch.unsqueeze(1) == s_batch.unsqueeze(0)
     proximal_mask = phys_dists < phys_dist_threshold
     eye_mask = torch.eye(N, device=device, dtype=torch.bool)
     labels_local = torch.arange(N, device=device)
@@ -207,9 +236,7 @@ def contrastive_loss(
     )
 
 
-def training_step(
-    data_loader, protein_encoder, mol_encoder, hard_batch_scheduler, prot_loss=True
-):
+def training_step(data_loader, protein_encoder, mol_encoder, hard_batch_scheduler):
     device = next(protein_encoder.parameters()).device
 
     protein_batch, molecule_batch = data_loader.get_random_batch()
@@ -226,27 +253,32 @@ def training_step(
     mol_out = mol_encoder(molecule_batch)
     hard_out = mol_encoder(random_ligand_batch)
 
-    p_index, m_index = radius(
-        molecule_batch.pos,
-        protein_out.pos,
-        4.0,
-        molecule_batch.batch,
-        protein_out.batch,
-    )
+    total_loss = None
+    pm_metrics = []
 
-    loss, loss_metrics = contrastive_loss(
-        protein_out.x[p_index],
-        mol_out[m_index],
-        protein_out.pos[p_index],
-        molecule_batch.pos[m_index],
-        protein_out.batch[p_index],
-        molecule_batch.batch[m_index],
-        hard_out,
-    )
+    for prot_anchor in [True, False]:
+        loss, loss_metrics = contrastive_loss(
+            protein_out.x,
+            protein_out.pos,
+            protein_out.batch,
+            mol_out,
+            molecule_batch.pos,
+            molecule_batch.batch,
+            hard_out,
+            prot_anchor,
+        )
+
+        if total_loss is None:
+            total_loss = loss
+        else:
+            total_loss = total_loss + loss
+
+        pm_metrics.append(loss_metrics)
+
     return (
-        loss,
+        total_loss,
         (protein_out.x, protein_out.batch, mol_out, molecule_batch.batch),
-        loss_metrics,
+        pm_metrics,
     )
 
 
@@ -353,11 +385,7 @@ def validate(
     for batch_idx in range(batch_count):
         with torch.no_grad():
             loss, embed_data, _ = training_step(
-                data_loader,
-                protein_encoder,
-                mol_encoder,
-                hard_batch_scheduler,
-                True,
+                data_loader, protein_encoder, mol_encoder, hard_batch_scheduler
             )
             screen_test.add(*embed_data)
             validation_loss_vals.append(loss.item())
@@ -462,10 +490,6 @@ def main(args):
         lr=train_params["learning_rate"],
     )
 
-    prot_loss = True
-
-    # get_hard_negative_difficulty = hard_negative_scheduler(0.5, 0.01, 20)
-
     for epoch in range(epoch_start, train_params["epochs"] + 1):
         log.info(f"Epoch {epoch}")
 
@@ -479,12 +503,11 @@ def main(args):
         mol_encoder.train()
 
         for batch_idx in range(train_loader.size // BATCH_SIZE):
-            # prot_loss = not prot_loss
             loss, _, loss_metrics = training_step(
-                train_loader, protein_encoder, mol_encoder, batch_scheduler, True
+                train_loader, protein_encoder, mol_encoder, batch_scheduler
             )
 
-            mean_rank = loss_metrics[0]
+            mean_rank = loss_metrics[0][0]
             batch_scheduler.step(mean_rank)
 
             batch_loss_vals.append(loss)

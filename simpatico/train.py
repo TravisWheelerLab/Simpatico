@@ -135,14 +135,13 @@ def contrastive_loss(
     if prot_anchor:
         a_embeddings, a_coords, a_batch = p_embeddings, p_coords, p_batch
         s_embeddings, s_coords, s_batch = l_embeddings, l_coords, l_batch
-        M = hard_l_embeddings.shape[0]  # Total Atoms in External Batch
     else:
         a_embeddings, a_coords, a_batch = l_embeddings, l_coords, l_batch
         s_embeddings, s_coords, s_batch = p_embeddings, p_coords, p_batch
-        M = s_embeddings.shape[0]  # Total Atoms in External Batch
 
     device = prot_x.device
     N = a_embeddings.shape[0]
+    M = hard_l_embeddings.shape[0]  # Total Atoms in External Batch
 
     # --- DEFENSE 1: NaN Checks ---
     if torch.isnan(p_embeddings).any():
@@ -161,12 +160,7 @@ def contrastive_loss(
 
         # 1. Compute Local Logits (FP32)
         logits_local = (a_f32 @ s_f32.t()) / temperature
-
-        # 2. Compute External Logits (FP32)
-        if prot_anchor:
-            logits_external = (p_embeddings @ hard_l_f32.t()) / temperature
-        else:
-            logits_external = (hard_l_f32 @ p_embeddings.t()) / temperature
+        logits_external = (a_f32 @ hard_l_f32.t()) / temperature
 
     # --- Masks ---
     phys_dists = torch.cdist(a_coords, s_coords)

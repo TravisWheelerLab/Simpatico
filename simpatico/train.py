@@ -473,7 +473,7 @@ def main(args):
     # Start small (32) to let the model learn basic atomic identity.
     batch_scheduler = HardBatchScheduler(
         start_size=hn_batch_size,
-        max_size=162,
+        ax_size=162,
         growth_factor=1.5,  # Increase by 50% each time
         patience=10,  # Require 50 stable batches before increasing
         target_metric=0.10,  # Target: Positive is in the top 10% of candidates
@@ -573,11 +573,6 @@ def main(args):
             weights_file_template % "CURRENT",
         )
 
-        if epoch >= 25 and epoch <= 50:
-            torch.save(
-                [protein_encoder.state_dict(), mol_encoder.state_dict()],
-                weights_file_template % f"e{epoch}",
-            )
         elif epoch % 5 == 0:
             torch.save(
                 [protein_encoder.state_dict(), mol_encoder.state_dict()],

@@ -1,7 +1,9 @@
-import torch
 from typing import Optional
-from torch.nn import SiLU, Sequential, Linear
-from torch_geometric.nn import GATv2Conv, knn, radius, Sequential as PyG_Sequential
+
+import torch
+from torch.nn import Linear, Sequential, SiLU
+from torch_geometric.nn import GATv2Conv, knn, radius
+from torch_geometric.nn import Sequential as PyG_Sequential
 
 
 class PositionalEdgeGenerator(torch.nn.Module):
@@ -17,10 +19,9 @@ class PositionalEdgeGenerator(torch.nn.Module):
             self.sigmoid, # CHANGED: from relu to sigmoid
         )
 
-    def forward(self, pos, x_subset, y_subset, k, batch):
+    def forward(self, pos, x_subset, y_subset, r, batch):
         device = pos.device
-        # ... (knn logic remains the same) ...
-        connections = knn(pos[x_subset], pos[y_subset], k, batch[x_subset], batch[y_subset])
+        connections = radius(pos[x_subset], pos[y_subset], r, batch[x_subset], batch[y_subset], max_num_neighbors=256)
 
         edge_index = torch.vstack((y_subset[connections[0]], x_subset[connections[1]])).to(device)
 

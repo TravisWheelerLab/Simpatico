@@ -1,41 +1,21 @@
-import torch
-from simpatico.utils.model_utils import ResBlock, PositionalEdgeGenerator
-from simpatico.models import ProteinEncoderDefaults
-from torch_geometric.nn import GATv2Conv, Sequential
-from torch_geometric.nn.models import MLP
-from torch_geometric.nn.aggr import AttentionalAggregation, MaxAggregation
-from torch.nn import ReLU, LayerNorm, Dropout
-from torch_geometric.utils import to_undirected
-from torch_geometric.nn import knn_graph
-from torch_geometric.nn.pool import knn
-from copy import deepcopy
 import math
 import sys
-from torch_geometric.data import Data
-from torch_geometric.utils import dropout_edge
+from copy import deepcopy
 
+import torch
+from torch.nn import Dropout, LayerNorm, ReLU
+from torch_geometric.data import Data
+from torch_geometric.nn import GATv2Conv, Sequential, knn_graph
+from torch_geometric.nn.aggr import AttentionalAggregation, MaxAggregation
+from torch_geometric.nn.models import MLP
+from torch_geometric.nn.pool import knn, radius
+from torch_geometric.utils import dropout_edge, to_undirected
+
+from simpatico.models import ProteinEncoderDefaults
+from simpatico.utils.model_utils import PositionalEdgeGenerator, ResBlock
 
 
 class ProteinEncoder(torch.nn.Module):
-    """
-    Generates protein atom embeddings from protein graph.
-
-    Args:
-        feature_dim (int, optional): Dimensionality of the input features.
-        hidden_dim (int, optional): Dimensionality of hidden layers.
-        out_dim (int, optional): Dimensionality of output.
-        heads (int, optional): Number of attention heads in graph attention layers (default 4).
-        blocks (int, optional): Number of residual blocks in model (default 3).
-        block_depth (int, optional): Number of residual layers in residual blocks (default 2).
-
-    Attributes:
-        input_projection_layer (torch.nn.Module): linear layer to project node features into [num_nodes, dims * heads]
-                                                  size tensor expected by residual block.
-        residual_blocks (torch.nn.ModuleList): List of residual blocks. Outputs will be concatenated in final layer.
-        ouptupt_projection_layer (torch.nn.Module): Non-linear layer which takes concatenation of residual_blocks outputs
-                                                    and outputs final embeddings.
-    """
-
     def __init__(
         self,
         feature_dim: int = ProteinEncoderDefaults["feature_dim"],
@@ -44,14 +24,10 @@ class ProteinEncoder(torch.nn.Module):
         heads: int = 4,
         blocks: int = 6,
         block_depth: int = 2,
-        atom_k: int = 10,
-        atom_vox_k: int = 15,
-        vox_k: int = 15,
+        atom_k: int = 4,
+        atom_vox_k: int = 6,
+        vox_k: int = 8,
     ):
-        # NAMING CONVENTION NOTE:
-        # references to `vox` or `voxels` is a legacy convention from earlier versions of the model.
-        # these refer to `surface_atoms`
-        # this will change in next version.
 
         super().__init__()
         # GAT layers concatenate heads, so true hidden dim is (hidden_dim*heads) dimensional.
@@ -84,12 +60,6 @@ class ProteinEncoder(torch.nn.Module):
                         for _ in range(blocks)
                     ]
                 )
-        # self.residual_blocks = torch.nn.ModuleList(
-        #     [
-        #         ResBlock(hidden_dim, heads, block_depth, edge_dim=1)
-        #         for _ in range(blocks)
-        #     ]
-        # )
 
         input_feat_size = (blocks + 1) * adjusted_hidden_dim
 
@@ -100,26 +70,12 @@ class ProteinEncoder(torch.nn.Module):
             torch.nn.Dropout(0.1), # ADDED: Dropout before final classification
             torch.nn.Linear(adjusted_hidden_dim, out_dim),
         )
-        # self.output_projection = torch.nn.Sequential(
-        #     torch.nn.Linear((blocks + 1) * adjusted_hidden_dim, adjusted_hidden_dim),
-        #     torch.nn.ReLU(),
-        #     torch.nn.Linear(adjusted_hidden_dim, out_dim),
-        # )
 
-    def forward(self, data):
-        """
-        Forward method. Produces atom-level embeddings of PyG protein-pocket graphs.
-        Args:
-            data (Batch): PyG batch of protein-pocket graphs.
-        Returns:
-            (torch.Tensor): (N, self.out_dim) shaped tensor of embedding values generated for pocket-surface atoms.
-            (torch.Tensor): (N, 3) sized tensor corresponding to pocket-surface postions.
-            (torch.Tensor): (N) sized tensor corresponding to pocket-surface postions.
-        """
-        x, pos, pocket_mask = (
+
+    def forward(self, data, pocket_coords):
+        x, pos = (
             data.x.float(),
-            data.pos,
-            data.pocket_mask,
+            data.pos
         )
 
         device = x.device
@@ -129,10 +85,14 @@ class ProteinEncoder(torch.nn.Module):
         else:
             batch = data.batch
 
+        pocket_mask = torch.zeros(len(x)).bool().to(device)
+        pocket_atom_index = radius(pocket_coords.pos, pos, 5, pocket_coords.batch, batch)[0].unique()
+        pocket_mask[pocket_atom_index] = True
+
         # Trim atoms that are excessively far from the voxel nodes.
-        trimmed_atom_index = knn(
-            pos, pos[pocket_mask], self.atom_vox_k, batch, batch[pocket_mask]
-        )[1].unique()
+        trimmed_atom_index = radius(
+            pos, pos[pocket_mask], 20, batch, batch[pocket_mask]
+        , max_num_neighbors=1000)[1].unique()
 
         atom_x = self.atom_input_projection(x[trimmed_atom_index])
         atom_pos = pos[trimmed_atom_index]

@@ -152,16 +152,18 @@ def main(args):
         if args.graphs_only:
             continue
 
-        target_graph, ligand_graph, actives_graph, decoys_graph = [graph_data[x] for x in target_row]
+        target_graph, _, actives_graph, decoys_graph = [graph_data[x] for x in target_row]
 
         target_graph = target_graph.to(device)
-        ligand_graph = ligand_graph.to(device)
 
         num_actives = actives_graph.batch[-1]+1
         num_total = num_actives + decoys_graph.batch[-1]+1
 
         with torch.no_grad():
-            protein_out = protein_encoder(target_graph, ligand_graph)
+            pocket_coords = Data(pos=get_xyz_from_file(target_row[1]))
+            pocket_coords.batch = torch.zeros(len(pocket_coords.pos))
+
+            protein_out = protein_encoder(target_graph, pocket_coords.to(device))
             target_embeddings = protein_out.x
 
             target_batch = Batch.from_data_list([Data(x=target_embeddings, source=target_graph.source)])

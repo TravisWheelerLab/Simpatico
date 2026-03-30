@@ -92,7 +92,7 @@ class ProteinEncoder(torch.nn.Module):
         # Trim atoms that are excessively far from the voxel nodes.
         trimmed_atom_index = radius(
             pos, pos[pocket_mask], 20, batch, batch[pocket_mask]
-        , max_num_neighbors=1000)[1].unique()
+        , max_num_neighbors=128)[1].unique()
 
         atom_x = self.atom_input_projection(x[trimmed_atom_index])
         atom_pos = pos[trimmed_atom_index]

@@ -22,7 +22,7 @@ class ProteinEncoder(torch.nn.Module):
         hidden_dim: int = ProteinEncoderDefaults["hidden_dim"],
         out_dim: int = ProteinEncoderDefaults["out_dim"],
         heads: int = 4,
-        blocks: int = 6,
+        blocks: int = 3,
         block_depth: int = 2,
         atom_k: int = 5,
         atom_vox_k: int = 5,
@@ -72,7 +72,7 @@ class ProteinEncoder(torch.nn.Module):
         )
 
 
-    def forward(self, data, pocket_coords):
+    def forward(self, data, pocket_coords, pocket_radius):
         x, pos = (
             data.x.float(),
             data.pos
@@ -86,7 +86,7 @@ class ProteinEncoder(torch.nn.Module):
             batch = data.batch
 
         pocket_mask = torch.zeros(len(x)).bool().to(device)
-        pocket_atom_index = radius(pocket_coords.pos, pos, 5, pocket_coords.batch, batch)[0].unique()
+        pocket_atom_index = radius(pocket_coords.pos, pos, pocket_radius, pocket_coords.batch, batch)[0].unique()
         pocket_mask[pocket_atom_index] = True
 
         # Trim atoms that are excessively far from the voxel nodes.

@@ -24,9 +24,9 @@ class ProteinEncoder(torch.nn.Module):
         heads: int = 4,
         blocks: int = 6,
         block_depth: int = 2,
-        atom_k: int = 4,
-        atom_vox_k: int = 6,
-        vox_k: int = 8,
+        atom_k: int = 5,
+        atom_vox_k: int = 5,
+        vox_k: int = 5,
     ):
 
         super().__init__()

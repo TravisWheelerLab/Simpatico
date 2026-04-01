@@ -89,10 +89,9 @@ class ProteinEncoder(torch.nn.Module):
         pocket_atom_index = radius(pocket_coords.pos, pos, pocket_radius, pocket_coords.batch, batch)[0].unique()
         pocket_mask[pocket_atom_index] = True
 
+
         # Trim atoms that are excessively far from the voxel nodes.
-        trimmed_atom_index = radius(
-            pos, pos[pocket_mask], 20, batch, batch[pocket_mask]
-        , max_num_neighbors=128)[1].unique()
+        trimmed_atom_index = radius(pos[pocket_mask], pos, 8, batch[pocket_mask], batch)[0].unique()
 
         atom_x = self.atom_input_projection(x[trimmed_atom_index])
         atom_pos = pos[trimmed_atom_index]

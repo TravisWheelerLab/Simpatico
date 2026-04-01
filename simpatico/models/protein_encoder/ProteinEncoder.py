@@ -72,7 +72,7 @@ class ProteinEncoder(torch.nn.Module):
         )
 
 
-    def forward(self, data, pocket_coords, pocket_radius):
+    def forward(self, data, pocket_coords, pocket_radius=5):
         x, pos = (
             data.x.float(),
             data.pos

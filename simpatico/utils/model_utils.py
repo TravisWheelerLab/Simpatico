@@ -21,7 +21,7 @@ class PositionalEdgeGenerator(torch.nn.Module):
 
     def forward(self, pos, x_subset, y_subset, r, batch):
         device = pos.device
-        connections = radius(pos[x_subset], pos[y_subset], r, batch[x_subset], batch[y_subset], max_num_neighbors=64)
+        connections = radius(pos[x_subset], pos[y_subset], r, batch[x_subset], batch[y_subset], max_num_neighbors=32)
 
         edge_index = torch.vstack((y_subset[connections[0]], x_subset[connections[1]])).to(device)
 

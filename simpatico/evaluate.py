@@ -1,35 +1,31 @@
 # scripts/train.py
-import pickle
+import argparse
 import logging
-import traceback
 import os
+import pickle
+import sys
+import traceback
+from glob import glob
 from os import path
 from pathlib import Path
-import sys
-import argparse
+from typing import Callable, List, Optional, Tuple
+
 import torch
-from typing import List, Tuple, Optional
-from torch_geometric.data import Data, Batch
+from torch_geometric.data import Batch, Data
 from torch_geometric.loader import DataLoader
 from torch_geometric.nn import radius
-from simpatico.utils.mol_utils import molfile2pyg, get_xyz_from_file
+
+from simpatico import config
+from simpatico.models.molecule_encoder.MolEncoder import MolEncoder
+from simpatico.models.protein_encoder.ProteinEncoder import ProteinEncoder
 from simpatico.utils.app_utils import get_encoder
-
-
 from simpatico.utils.data_utils import (
     ProteinLigandDataLoader,
     TrainingOutputHandler,
     handle_no_overwrite,
 )
-from simpatico.models.molecule_encoder.MolEncoder import MolEncoder
-from simpatico.models.protein_encoder.ProteinEncoder import ProteinEncoder
-from simpatico.utils.pdb_utils import pdb2pyg, extract_ligands
-from simpatico import config
-
-from typing import Callable
-from glob import glob
-
-import logging
+from simpatico.utils.mol_utils import get_xyz_from_file, molfile2pyg
+from simpatico.utils.pdb_utils import extract_ligands, pdb2pyg
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -96,12 +92,6 @@ def add_arguments(parser: argparse.ArgumentParser):
         help="Indicates molecule evaluation.",
     )
     parser.add_argument(
-        "-g",
-        "--graph-in",
-        action="store_true",
-        help="Indicates that input file is PyG graph",
-    )
-    parser.add_argument(
         '--name-depth',
         type=int,
         default=1
@@ -114,7 +104,6 @@ def add_arguments(parser: argparse.ArgumentParser):
     parser.add_argument(
         '--pocket-id-index',
         type=int,
-
     )
 
     parser.set_defaults(main=main)

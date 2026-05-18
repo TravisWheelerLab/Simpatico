@@ -1,38 +1,34 @@
+import argparse
+import logging
 import os
-import time
-import faiss
-import numpy as np
 import pickle
+import sys
+import time
+from glob import glob
 from os import path
 from pathlib import Path
-import sys
-import argparse
+from typing import Callable, List, Optional, Tuple
+
+import faiss
+import numpy as np
 import torch
-from typing import List, Tuple, Optional
-from torch_geometric.data import Data, Batch
+from torch_geometric.data import Batch, Data
 from torch_geometric.loader import DataLoader
 from torch_geometric.nn import radius
-from simpatico.utils.mol_utils import molfile2pyg, get_xyz_from_file
-from simpatico.utils.faiss_utils import VectorDatabase
-from simpatico.utils.data_utils import concatenate_pyg_files
+
+from simpatico.models import MolEncoderDefaults, ProteinEncoderDefaults
+from simpatico.models.molecule_encoder.MolEncoder import MolEncoder
+from simpatico.models.protein_encoder.ProteinEncoder import ProteinEncoder
 from simpatico.utils.app_utils import get_encoder
-from torch_geometric.loader import DataLoader
-
-
 from simpatico.utils.data_utils import (
     ProteinLigandDataLoader,
     TrainingOutputHandler,
+    concatenate_pyg_files,
     report_results,
 )
-from simpatico.models.molecule_encoder.MolEncoder import MolEncoder
-from simpatico.models.protein_encoder.ProteinEncoder import ProteinEncoder
-from simpatico.models import MolEncoderDefaults, ProteinEncoderDefaults
+from simpatico.utils.faiss_utils import VectorDatabase
+from simpatico.utils.mol_utils import get_xyz_from_file, molfile2pyg
 from simpatico.utils.pdb_utils import pdb2pyg
-
-from typing import Callable
-from glob import glob
-
-import logging
 
 
 def add_arguments(parser):
@@ -68,6 +64,10 @@ def add_arguments(parser):
     parser.add_argument('--results-file', type=str,
                         help='The path for the singular results file (required if one-db is True).')
 
+    parser.add_argument('--encode-db',
+                        action='store_true',
+                        help='Perform inference on molecule database')
+
     parser.set_defaults(main=main)
 
 if __name__ == "__main__":
@@ -100,11 +100,18 @@ def main(args):
         parser.error("the argument -t/--encoder-types is required when -w/--weights is present.")
 
     query_files = []
+    coord_files = []
     db_files = []
 
     with open(args.input_file) as spec_in:
         for line in spec_in:
-            data_type, graph_file = [x.strip() for x in line.split(",")]
+            row_data = [x.strip() for x in line.split(",")]
+            if len(row_data) == 3:
+                data_type, graph_file, coord_file = row_data
+                coord_files.append(coord_file)
+            else:
+                data_type, graph_file = row_data
+
             data_type = data_type.lower()
 
             if data_type == "q":
@@ -113,15 +120,32 @@ def main(args):
             if data_type == "d":
                 db_files.append(graph_file)
 
-    query_batch = concatenate_pyg_files(query_files)
+    query_graph_list = []
+    pocket_coord_list = []
+
+    for pocket_file, coord_file in zip(query_files, coord_files):
+        if pocket_file[-3:] != 'pyg':
+            query_g = pdb2pyg(pocket_file)
+            query_graph_list.append(query_g)
+
+        pocket_coordinates = get_xyz_from_file(coord_file)
+        pocket_coord_list.append(Data(pos=pocket_coordinates))
+
+    query_batch = Batch.from_data_list(query_graph_list)
+    coord_batch = Batch.from_data_list(pocket_coord_list)
+
     db_encoder = None
 
     if args.weights is not None:
         query_encoder = get_encoder(args.encoder_types[0], args.weights, args.device)
-        db_encoder = get_encoder(args.encoder_types[1], args.weights, args.device)
+
+        if args.encode_db:
+            db_encoder = get_encoder(args.encoder_types[1], args.weights, args.device)
+        else:
+            db_encoder = None
 
         with torch.no_grad():
-            query_embeds = query_encoder(query_batch.to(args.device))
+            query_embeds = query_encoder(query_batch.to(args.device), coord_batch.to(args.device))
 
         if args.encoder_types[0] == 'm':
             query_embeds = Data(x=query_embeds, batch=query_batch.batch)
@@ -144,7 +168,6 @@ def main(args):
         vector_db = VectorDatabase(Batch.from_data_list(db_graphs))
         queries.get_score_thresholds(vector_db)
         search_results = vector_db.query(queries)
-        print(search_results[0][1])
 
         with open(args.results_file, 'wb') as results_out:
             pickle.dump(search_results, results_out)
@@ -155,7 +178,7 @@ def main(args):
         for db_file in db_files:
             log.info(f'Starting {db_file}')
             db_filename = '.'.join(db_file.split('/')[-1].split('.')[:-1])
-            output_filename = db_filename + '.pkl'
+            output_filename = db_filename + '_query-results.csv'
 
             db_batch = torch.load(db_file, weights_only=False)
 
@@ -186,8 +209,13 @@ def main(args):
                     sys.exit(f'Saved query scoring thresholds in {args.save_thresholds}.')
 
             search_results = vector_db.query(queries)
+            output_csv_content = ''
 
-            with open(args.output_dir + output_filename, 'wb') as results_out:
-                pickle.dump(search_results, results_out)
+            for target_idx in range(len(search_results)):
+                for m_score, m_idx in zip(*search_results[target_idx]):
+                    output_csv_content += f"{target_idx+1},{m_idx+1},{m_score}\n"
+
+            with open(args.output_dir + output_filename, 'w') as results_out:
+                results_out.write(output_csv_content)
 
             log.info(f"Successfully completed {db_file}")

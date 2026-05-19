@@ -1,26 +1,24 @@
-import re
-import pickle
-from os import path
-import sys
 import os
+import pickle
+import re
+import sys
 from copy import deepcopy
-import torch
+from os import path
+from typing import List, Optional, Tuple
+
 import numpy as np
-from torch_geometric.data import Data
-from rdkit import Chem
-from rdkit.Chem import AllChem, AddHs
-from rdkit import RDLogger
-from torch_geometric.utils import subgraph, to_undirected
-from torch_geometric.data import Batch
+import torch
+from molvs import Standardizer
+from rdkit import Chem, RDLogger
+from rdkit.Chem import AddHs, AllChem
 from rdkit.Chem.rdchem import Mol
-from rdkit.Chem import AllChem
 from rdkit.Chem.Scaffolds import MurckoScaffold
 from torch import Tensor
-from typing import List, Tuple, Optional
-from molvs import Standardizer
+from torch_geometric.data import Batch, Data
+from torch_geometric.utils import subgraph, to_undirected
 
 from simpatico import config
-from simpatico.utils.utils import to_onehot, get_k_hop_edges
+from simpatico.utils.utils import get_k_hop_edges, to_onehot
 
 
 def get_mol_atom_features(m: Mol, atom_vocab: List[str]) -> torch.Tensor:
@@ -308,15 +306,15 @@ def get_pos_from_mol2(input_file):
                 continue
 
             line_content = re.split(r'\s+', line.strip())
-            
+
             if line_content[1] == 'H':
                 continue
-                
+
             xyz.append([float(x.strip()) for x in line_content[2:5]])
 
     return torch.tensor(xyz)
 
-def molfile2rdkit(m_file):
+def molfile2rdkit(m_file, header=False):
     # Extract the filename and filetype from the input file path
     _, filetype = os.path.splitext(m_file)
 
@@ -328,7 +326,7 @@ def molfile2rdkit(m_file):
         mols = [Chem.MolFromPDBFile(m_file, sanitize=False)]
 
     elif filetype in [".ism", ".smi", ".cxsmiles"]:
-        mols = Chem.SmilesMolSupplier(m_file, sanitize=False)
+        mols = Chem.SmilesMolSupplier(m_file, sanitize=False, titleLine=header)
 
     elif filetype == ".mol2":
         mols = [Chem.MolFromMol2File(m_file, sanitize=False)]
@@ -370,32 +368,35 @@ def molfile2pyg(
     s_i = 0
 
     for m in mols:
-        # Convert each molecule to a PyG graph
-        mg = mol2pyg(
-            m,
-            ignore_pos,
-            get_scaffold=get_scaffold,
-        )
+        if m is None:
+            mg = None
+        else:
+            mg = mol2pyg(
+                m,
+                ignore_pos,
+                get_scaffold=get_scaffold,
+            )
         if mg is None:
-            # Skip molecules that failed to convert
-            continue
+            # Create dummy molecule to maintain proper indexing
+            mg = mol2pyg(Chem.MolFromSmiles('C'), ignore_pos, get_scaffold=get_scaffold)
+            mg.x[mg.x != 0] = 0
+            m_name = filename + f"_{s_i}"
         else:
             if m.HasProp("_Name"):
                 m_name = m.GetProp("_Name")
             else:
                 m_name = filename + f"_{s_i}"
 
-            # Assign a name to the graph based on the file name and molecule index
-            mg.name = m_name
-            mol_batch.append(mg)
-            try:
-                # Try generating SMILES with default settings
-                smile_string = Chem.MolToSmiles(m)
-            except:
-                smile_string = 'NA'
+        mg.name = m_name
+        mol_batch.append(mg)
+        try:
+            # Try generating SMILES with default settings
+            smile_string = Chem.MolToSmiles(m)
+        except:
+            smile_string = 'NA'
 
-            smiles.append(smile_string)
-            s_i += 1
+        smiles.append(smile_string)
+        s_i += 1
 
     if len(mol_batch) == 0:
         # Return None if no valid graphs were generated

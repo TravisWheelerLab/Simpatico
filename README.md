@@ -1,12 +1,13 @@
 # About Simpatico 
-Simpatico is a graph neural network for producing high-dimensional embeddings of atoms in proteins and small molecules. Atomic representations produced by Simpatico are co-located in embedding space according to their interaction potential. This allows users to perform rapid virtual screening over extremely large datasets. In our [paper](https://www.biorxiv.org/content/10.1101/2025.06.08.658499v1), we show that not only is Simpatico’s binding prediction accuracy competitive with state-of-the-art deep learning-assisted docking methods, but it can perform virtual screening more than 1000× faster. Furthermore, Simpatico embeddings are versatile: users may just as easily use them to screen protein pockets with a small-molecule target (akin to toxicology screening), or to assess shared binding properties between non-homologous protein structures.
+Simpatico is a graph neural network for producing high-dimensional embeddings of atoms in proteins and small molecules. Atomic representations produced by Simpatico are co-located in embedding space according to their interaction potential. This allows users to perform rapid virtual screening over extremely large datasets. See our [paper](https://www.biorxiv.org/content/10.1101/2025.06.08.658499v2) for further details.
+
+**This repo is being actively updated. If you encounter a problem, please download the latest version first and see if this solves the issue.**
 
 ## Installation
 
 <details closed>
 <summary><strong>Installing simpatico on your system</strong></summary>
 Simpatico depends on several GPU-based libraries such as PyTorch that are sensitive to your computing environment (e.g., CUDA version and GPU availability). These dependencies include PyTorch, PyG, and Faiss.
-
 
 The following sequence of commands will work for most users. This procedure is assembled from installation instructions provided by the respective libraries:
 

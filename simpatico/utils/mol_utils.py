@@ -355,6 +355,9 @@ def molfile2pyg(
     Returns:
         Optional[Batch]: A batch of PyG Data objects, or None if conversion fails.
     """
+    if m_file[-3:] == 'pyg':
+        return torch.load(m_file, weights_only=False)
+
     mols = molfile2rdkit(m_file)
     smiles = []
 

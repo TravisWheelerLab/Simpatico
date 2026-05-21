@@ -1,7 +1,7 @@
 # About Simpatico 
 Simpatico is a graph neural network for producing high-dimensional embeddings of atoms in proteins and small molecules. Atomic representations produced by Simpatico are co-located in embedding space according to their interaction potential. This allows users to perform rapid virtual screening over extremely large datasets. See our [paper](https://www.biorxiv.org/content/10.1101/2025.06.08.658499v2) for further details.
 
-**This repo is being actively updated. If you encounter a problem, please download the latest version first and see if this solves the issue.**
+**This repo is being actively updated. If you encounter a problem, please download the latest version first and see if this solves the issue. If the problem persists, contact the authors.**
 
 ## Installation
 
@@ -16,7 +16,6 @@ The following sequence of commands will work for most users. This procedure is a
 * Faiss – [https://pypi.org/project/faiss-gpu-cu12/](https://pypi.org/project/faiss-gpu-cu12/)
 
 ### 1. Installing PyTorch
-
 ```bash
 pip install torch
 ```
@@ -75,85 +74,24 @@ pip install Simpatico
 </details>
 
 ## Usage
-
-For demonstration purposes, example protein and small molecule structures are included in `Simpatico/examples/data/`, including a small random selection from PDBBind and a tiny compound library sourced from ENAMINE. In the examples below, commands are run from the root `Simpatico` directory.
-
-<details closed>
-<summary><strong>Generating protein and small molecule atom embeddings</strong></summary>
-
-Out of the box, simpatico comes with weights trained on PDBBind and can be used to generate embeddings for your own proteins and small molecules.
-
-To obtain embeddings for protein pockets, prepare a CSV file in this format:
-
-**Simpatico/examples/spec\_files/protein\_eval\_example.csv**
-
-```
-examples/data/pdbbind_sample/1a7c/1a7c_pocket.pdb, examples/data/pdbbind_sample/1a7c/1a7c_ligand.sdf
-examples/data/pdbbind_sample/1a7x/1a7x_pocket.pdb, examples/data/pdbbind_sample/1a7x/1a7x_ligand.sdf
-examples/data/pdbbind_sample/1ahx/1ahx_pocket.pdb, examples/data/pdbbind_sample/1ahx/1ahx_ligand.sdf
-...
-```
-
-Positional data from the ligand files in the second column will be used to define the protein pocket surface atoms. Pockets can be specified with any 3D molecular structure file (`.sdf`, `.mol2`, `.pdb`) or with a 3-column CSV where each line lists an X, Y, Z coordinate.
-
-Once your target structure files are ready, generate embeddings with:
-
-### Command Usage
-
-```bash
-simpatico eval <inpute_file.csv> <output_dir/> (-p | -m)
-```
-
-You must specify either `-p` (protein) or `-m` (molecule).
-
-### Example
-
-```bash
-simpatico eval examples/spec_files/protein_eval_example.csv examples/data/protein_embeds -p
-```
-
-For each protein `.pdb` file, a `.pyg` file is created in the output directory. The graph nodes represent pocket surface atoms, with embedding values stored in `graph.x` and 3D positions in `graph.pos`.
-
-Generating small molecule embeddings is nearly identical. In this case, the input CSV requires only a single column:
-
-**Simpatico/examples/spec\_files/mol\_eval\_example.csv**
-
-```
-examples/data/smiles_sample/smiles_1.ism
-examples/data/smiles_sample/smiles_2.ism
-examples/data/smiles_sample/smiles_3.ism
-...
-```
-
-Run the command as follows:
-
-### Example
-
-```bash
-simpatico eval examples/spec_files/mol_eval_example.csv examples/data/mol_embeds -m
-```
-
-For each specified molecule, a `.pyg` file containing a [batch of graphs](https://pytorch-geometric.readthedocs.io/en/2.5.3/generated/torch_geometric.data.Batch.html) will be generated. Embedding values are stored in `graph.x`, similar to protein embeddings.
-
-</details>
+For demonstration purposes, protein and molecule structures have been sourced from a test-screening sample from the DUDE dataset (aa2ar), located in `Simpatico/examples/aa2ar_screen`. All commands described below are run from the root `Simpatico` directory.
 
 <details closed>
-<summary><strong>Querying the vector database (virtual screening)</strong></summary>
-In the simpatico paper (https://www.biorxiv.org/content/10.1101/2025.06.08.658499v1), we show that virtual screening may be performed by using protein pocket embeddings to query a Faiss vector database of small molecule embeddings. This basic search is followed by an aggregation procedure over each query’s nearest neighbors.
+<summary><strong>Virtual screening a small-molecule database for a protein target</strong></summary>
+Virtual screening is performed by using protein pocket embeddings to query a Faiss vector database of small-molecule atom embeddings. An aggregation procedure over the atom embeddings produces a score for every molecule containing an atom observed during the nearest neighbors search process. 
 
-To run a query, prepare a CSV file specifying which embedding files to use as queries (e.g., protein pockets) and which to use as the vector database (e.g., candidate molecules), formatted like in the example below:
+To run a query, prepare a CSV file specifying which embedding files to use as queries (e.g., protein pockets) and which to use as the vector database (e.g., candidate molecules). The following csv file is used to run our example screening: 
 
-**examples/spec\_files/query\_example.csv**
-
+**examples/aa2ar_screen/aa2ar\_screen\_1.csv**
 ```
-q,examples/data/protein_embeds/2fme_pocket_embeds.pyg
-q,examples/data/protein_embeds/5m4k_pocket_embeds.pyg
-...
-d,examples/data/mol_embeds/smiles_2_embeds.pyg
-d,examples/data/mol_embeds/smiles_1_embeds.pyg
+q,examples/aa2ar_screen/receptor.pdb,examples/aa2ar_screen/crystal_ligand.mol2
+d,examples/aa2ar_screen/molecule_library_1.ism
+d,examples/aa2ar_screen/molecule_library_2.ism
 ```
 
-Each line has two columns: the first is `q` (query) or `d` (database), and the second is the path to a `.pyg` file generated by `simpatico eval`.
+For each line, the first column specifies the data type with a single character, either a `q` (query) or `d` (database). This will always be followed by a second column specifying the path to the molecular data file.
+
+When specifying the protein query, we must include an additional third column to specify the location of the protein target pocket. This will usually be a 3D small molecule file (e.g. `.sdf` or `.mol2`) from which 3D coordinates may be extracted. A ligand structure docked in the target pocket is ideal for this purpose.  
 
 To run the query:
 
@@ -166,105 +104,90 @@ simpatico query <input_file> <output_file>
 ### Example
 
 ```bash
-simpatico query examples/spec_files/query_example.csv examples/data/query_results.pkl
+simpatico query examples/aa2ar_screen/aa2ar_screen_1.csv examples/aa2ar_screen/results/
 ```
 
-This generates score values saved to `examples/data/query_results.pkl`.
-
-To get a human-readable version of the results, run:
-
-```bash
-simpatico print-results examples/data/query_results.pkl
-```
-
-The output is structured as follows:
+This will generate two result files, saved to the `examples/aa2ar_screen/results/` directory, one per small-molecule database specified in the input file. `molecule_library_1_query-results.csv` should look something like this:
 
 ```
->query sources:
-1 examples/data/pdbbind_sample/2fme/2fme_pocket.pdb
-2 examples/data/pdbbind_sample/5m4k/5m4k_pocket.pdb
-...
-
->db sources:
-1 examples/data/smiles_sample/smiles_2.ism
-2 examples/data/smiles_sample/smiles_1.ism
-...
-
->results:
-1 1 2 827 1
-1 1 1 815 2
-1 1 1 489 3
-...
-16 1 3 196 61
-16 1 1 784 62
+1,11,37.93132781982422
+1,209,34.20753860473633
+1,211,25.427879333496094
+1,145,24.6605281829834
+1,379,24.286479949951172
 ...
 ```
 
-The blocks under `>query sources:` and `>db sources:` list indices corresponding to the query and database files, respectively.
+Each row of the results `.csv` has three columns: The query index, small-molecule index, and the score. In effect, for every query included in the input file, each non-zero scoring small molecule is listed in order of score, from highest (best) scoring to lowest score. In our example case, molecules 1-482 from `molecule_library_1.ism` are known actives, and therefore occupy an outsized proportion of high scoring rows.
 
-The lines below `>results:` list the top scoring matches, using this column format:
-
-```
-TARGET_SOURCE_INDEX TARGET_SOURCE_ITEM DB_SOURCE_INDEX DB_SOURCE_ITEM ITEM_RANK
-```
-
-For example:
-
-```
-1 1 2 827 1
-```
-
-This line is read as: the best-scoring molecule (`ITEM_RANK=1`) for item 1 from target file 1 (`2fme_pocket.pdb`) comes from database file 2 (`smiles_1.ism`), specifically the 827th molecule in that file.
-
-Farther down, the line:
-
-```
-16 1 3 196 61
-```
-
-For query file 16, item 1, the 61st highest-scoring molecule is molecule 196 in database file 3.
-
-Results may be saved to a `.txt` file or some other output by sending the output to the desired file, like:
-
-```bash
-simpatico print-results examples/data/query_results.pkl > vs_results.txt
-```
 </details>
 
-## Training
 <details closed>
-<summary><strong>Training and updating model weights</strong></summary>
-Simpatico is trained on structural data of protein-ligand complexes. Each training sample consists of one protein structure and one ligand structure, which together make up the bound protein-ligand complex. The first step in training or fine-tuning a model will be to specify which protein structure files correspond to which ligand structure files. We must also denote which of these pairs should be included in the training set, and which should be held out for the validation set. This is performed by listing the files accordingly in the `.csv` file we will ultimately be providing the training function. 
+<summary><strong>Generating protein and small molecule atom embeddings</strong></summary>
 
-**examples/spec\_files/query\_example.csv**
+The previous screening example was quite slow. This is because for each small molecule library, we generated graphs, ran inference, and then finally performed the search-based screening process. In practice, it may be more efficient to generate small molecule embeddings ahead of time. Then, any number of queries may be used for rapid downstream screening.
+
+To generate small molecule embeddings, we need just need a list of the molecule libraries:
+
+**examples/aa2ar_screen/mol_lib_embed.txt**
+
 ```
-t, examples/data/pdbbind_sample/1a7c/1a7c_pocket.pdb, examples/data/pdbbind_sample/1a7c/1a7c_ligand.sdf
-t, examples/data/pdbbind_sample/1a7x/1a7x_pocket.pdb, examples/data/pdbbind_sample/1a7x/1a7x_ligand.sdf
-...
-v, examples/data/pdbbind_sample/6v1c/6v1c_pocket.pdb, examples/data/pdbbind_sample/6v1c/6v1c_ligand.sdf
-v, examples/data/pdbbind_sample/8lpr/8lpr_pocket.pdb, examples/data/pdbbind_sample/8lpr/8lpr_ligand.sdf
+examples/aa2ar_screen/molecule_library_1.ism
+examples/aa2ar_screen/molecule_library_2.ism
 ```
 
-The value in the first column will be either `t` or `v` to indicate whether the protein-ligand pair belongs to the train or validation set, respectively. The second column is the path to the protein pdb structure, and the third column the path to the corresponding ligand structure. 
-
-With the proper `.csv` file, you may now kickoff a new round of training with the following command:
-
+Run the command as follows:
 
 ### Command Usage
 
 ```bash
-simpatico train <input_file> <weight_path> [OPTIONS]
+simpatico query <input_file> <output_dir> [-m|-p]
 ```
 
 ### Example
 
 ```bash
-simpatico train examples/spec_files/train_example.csv examples/data/example_weights.pt -o examples/data/example_train.out -l simpatico/models/weights/model_v1.pt
+simpatico eval examples/aa2ar_screen/mol_lib_embed.txt examples/aa2ar_screen -m
+```
+Note the `-m` flag to specify that we are converting a batch of small-molecules. For proteins, we would include `-p`.
+
+For each specified molecule, a `.pyg` file containing a [batch of graphs](https://pytorch-geometric.readthedocs.io/en/2.5.3/generated/torch_geometric.data.Batch.html) will be generated. Embedding values are stored in `graph.x`. Using the `.pyg` embedding files as the molecular library (instead of `.ism` files) will result in dramatically faster screen times. 
+</details>
+
+## Training
+<details closed>
+<summary><strong>Training and updating model weights</strong></summary>
+Simpatico is trained on structural data of protein-ligand complexes. Each training sample consists of one protein structure and one ligand structure, which together make up the bound protein-ligand complex. 
+
+Input for a simpatico training run is stored in the json format. From our example:
+
+**examples/train_example/train_example.json**
+```bash
+{
+    "train_handle": "simpatico_train_example",
+    "data_file": "examples/train_example/PDBBIND_sample.pkl",
+    "validation_file": "examples/train_example/example_validation.txt",
+    "holdout_file": "examples/train_example/example_holdout.txt",
+    "output_dir": "examples/train_example/",
+    "batch_size": 16,
+    "epochs": 1000,
+    "learning_rate": 0.0001
+    "weight_checkpoint_interval": 5
+}
+```
+`train_handle` specifies a unique string to associate with the weight and log outputs. `data_file` must point to a pickle (`.pkl`) file containing a python list-of-lists. Each list-item in the list contains a protein graph in index 0, and the graph of its bound ligand partner in index 1. We have stored a (very) small sample of graphs from sourced from the PDBBind dataset in `examples/train_example/PDBBIND_sample.pkl`. `validation_file` and `holdout_file` should point to text files that list per-line a substring that may be found in the `.name` attribute of our training graphs (in our case, this is PDB IDs). If the substring is observed, the corresponding sample will be used withheld from the training data and used in the validation set (if listed in the `validation_file`) or simply witheld from training (if listed in the `holdout_file`). `output_dir` specifies where files generated during training run (weights, log files) should be sent. The hyperparameter items are self explanatory.
+### Command Usage
+
+```bash
+simpatico train <input_file> 
 ```
 
-In this example, we are loading the pretrained weights `-l simpatico/models/weights/model_v1.pt` and updating them with our new training examples, and storing the updated weights in `examples/data/example_weights.pt`. Note that this is a naive approach to fine-tuning, and we have not yet implemented regularization techniques appropriate for a proper fine-tuning protocol. To train weights completely anew, simply leave out the `-l` argument.  
-</details closed>
+### Example
 
+```bash
+simpatico train examples/train_example/train_example.json
+```  
+</details closed>
 
 
 ## Authors

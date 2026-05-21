@@ -1,0 +1,10 @@
+{
+    "train_handle": "simpatico_train_example",
+    "data_file": "examples/train_example/PDBBIND_sample.pkl",
+    "validation_file": "examples/train_example/example_validation.txt",
+    "holdout_file": "examples/train_example/example_holdout.txt",
+    "output_dir": "examples/train_example/",
+    "batch_size": 16,
+    "epochs": 1000,
+    "learning_rate": 0.0001
+}

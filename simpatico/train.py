@@ -374,7 +374,7 @@ def validate(
     protein_encoder.eval()
     mol_encoder.eval()
 
-    batch_count = data_loader.size // batch_size
+    batch_count = max(data_loader.size // batch_size, 1)
 
     for batch_idx in range(batch_count):
         with torch.no_grad():
@@ -388,11 +388,23 @@ def validate(
     return sum(validation_loss_vals) / len(validation_loss_vals), epoch_acc
 
 
-def get_tv_sets(data, holdout_file):
-    with open(holdout_file) as f_in:
-        holdout_substrings = [x.strip() for x in f_in.readlines()]
+def get_tv_sets(data, validation_file, holdout_file=None):
+    with open(validation_file) as f_in:
+        validation_substrings = [x.strip() for x in f_in.readlines()]
 
+    holdout_substrings = []
+    if holdout_file:
+        with open(holdout_file) as f_in:
+            holdout_substrings = [x.strip() for x in f_in.readlines()]
+
+    validation_index = []
     holdout_index = []
+
+    for hs in validation_substrings:
+        for i in range(len(data)):
+            if hs in data[i][0].name:
+                validation_index.append(i)
+
     for hs in holdout_substrings:
         for i in range(len(data)):
             if hs in data[i][0].name:
@@ -403,6 +415,8 @@ def get_tv_sets(data, holdout_file):
 
     for idx in range(len(data)):
         if idx in holdout_index:
+            continue
+        elif idx in validation_index:
             validation_data.append(data[idx])
         else:
             train_data.append(data[idx])
@@ -417,6 +431,7 @@ def main(args):
     train_handle = train_params["train_handle"]
     weights_dir = Path(f"{train_params['output_dir']}/weights")
     weights_dir.mkdir(exist_ok=True)
+    weight_checkpoint_interval = int(train_params['weight_checkpoint_interval'])
 
     BATCH_SIZE = train_params["batch_size"]
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -427,16 +442,9 @@ def main(args):
     with open(train_params["data_file"], "rb") as train_validate_data:
         data_corpus = pickle.load(train_validate_data)
 
-    train_data, validation_samples = get_tv_sets(
-        data_corpus, train_params["holdout_file"]
+    train_data, validation_data = get_tv_sets(
+        data_corpus, train_params['validation_file'], train_params["holdout_file"]
     )
-    validation_data = []
-
-    g = torch.Generator()
-    g.manual_seed(1234)
-
-    for random_idx in torch.randperm(len(validation_samples), generator=g)[:200]:
-        validation_data.append(validation_samples[random_idx])
 
     train_loader = ProteinLigandDataLoader(train_data, batch_size=BATCH_SIZE)
     validation_loader = ProteinLigandDataLoader(validation_data, batch_size=BATCH_SIZE)
@@ -573,7 +581,7 @@ def main(args):
             weights_file_template % "CURRENT",
         )
 
-        if epoch % 5 == 0:
+        if epoch % weight_checkpoint_interval == 0:
             torch.save(
                 [protein_encoder.state_dict(), mol_encoder.state_dict()],
                 weights_file_template % f"e{epoch}",
@@ -581,7 +589,6 @@ def main(args):
 
 
 if __name__ == "__main__":
-    # This MUST be the first thing that runs in your main block
     try:
         mp.set_start_method("spawn", force=True)
     except RuntimeError:

@@ -127,7 +127,7 @@ Each row of the results `.csv` has three columns: The query index, small-molecul
 
 The previous screening example was quite slow. This is because for each small molecule library, we generated graphs, ran inference, and then finally performed the search-based screening process. In practice, it may be more efficient to generate small molecule embeddings ahead of time. Then, any number of queries may be used for rapid downstream screening.
 
-To generate small molecule embeddings, we need just need a list of the molecule libraries:
+To generate small molecule embeddings, we just need a list of the molecule libraries:
 
 **examples/aa2ar_screen/mol_lib_embed.txt**
 
@@ -147,7 +147,7 @@ simpatico query <input_file> <output_dir> [-m|-p]
 ### Example
 
 ```bash
-simpatico eval examples/aa2ar_screen/mol_lib_embed.txt examples/aa2ar_screen -m
+simpatico eval examples/aa2ar_screen/mol_lib_embed.txt examples/aa2ar_screen/embeddings -m
 ```
 Note the `-m` flag to specify that we are converting a batch of small-molecules. For proteins, we would include `-p`.
 
@@ -175,7 +175,7 @@ Input for a simpatico training run is stored in the json format. From our exampl
     "weight_checkpoint_interval": 5
 }
 ```
-`train_handle` specifies a unique string to associate with the weight and log outputs. `data_file` must point to a pickle (`.pkl`) file containing a python list-of-lists. Each list-item in the list contains a protein graph in index 0, and the graph of its bound ligand partner in index 1. We have stored a (very) small sample of graphs from sourced from the PDBBind dataset in `examples/train_example/PDBBIND_sample.pkl`. `validation_file` and `holdout_file` should point to text files that list per-line a substring that may be found in the `.name` attribute of our training graphs (in our case, this is PDB IDs). If the substring is observed, the corresponding sample will be used withheld from the training data and used in the validation set (if listed in the `validation_file`) or simply witheld from training (if listed in the `holdout_file`). `output_dir` specifies where files generated during training run (weights, log files) should be sent. The hyperparameter items are self explanatory.
+`train_handle` specifies a unique string to associate with the weight and log outputs. `data_file` must point to a pickle (`.pkl`) file containing a python list-of-lists. Each list-item in the list contains a protein graph in index 0, and the graph of its bound ligand partner in index 1. We have stored a (very) small sample of graphs from sourced from the PDBBind dataset in `examples/train_example/PDBBIND_sample.pkl`. `validation_file` and `holdout_file` should point to text files that list per-line a substring that may be found in the `.name` attribute of our training graphs (in our case, this is PDB IDs). If the substring is observed, the corresponding sample will be used withheld from the training data and used in the validation set (if listed in the `validation_file`) or simply witheld from training (if listed in the `holdout_file`). `output_dir` specifies where files generated during training run (weights, log files) should be sent. 
 ### Command Usage
 
 ```bash

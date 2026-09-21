@@ -159,50 +159,22 @@ class ProteinLigandDataLoader:
         """
         return torch.randperm(mol_batch.x.size(0))
 
-    def get_random_pocket(self, protein_graph: Data) -> torch.Tensor:
-        """
-        Selects random pocket coordinates based on graph's 'proximal' mask as pocket center
-        Args:
-            protein_graph (Data): protein graph
-        Returns:
-            (torch.Tensor): boolean mask to indicate pocket surface atoms
-        """
-        pocket_atoms = torch.where(protein_graph.proximal)[0]
-
-        if pocket_atoms.size(0) == 0:
-            return None
-
-        pocket_atoms_pos = protein_graph.pos[pocket_atoms]
-        random_pocket_atom = torch.randperm(pocket_atoms.size(0))[0]
-
-        # get a local cluster of surface atoms which will be used to weight the location of the pocket
-        random_pocket_neighbors = radius(
-            pocket_atoms_pos, pocket_atoms_pos[random_pocket_atom], 5
-        )[1].unique()
-
-        # get weights to produce a randomized average of pocket atom locations
-        # weight values should sum to 1 to produce a proper average
-        random_pos_coefficients = torch.rand(random_pocket_neighbors.size(0))
-        random_pos_coefficients /= random_pos_coefficients.sum()
-        random_pos_coefficients = random_pos_coefficients.unsqueeze(1)
-
-        # set pocket center to randomized average of pocket atom locations
-        pocket_center = (
-            pocket_atoms_pos[random_pocket_neighbors] * random_pos_coefficients
-        ).sum(0)
-
-        return graph_utils.get_pocket_mask(protein_graph, pocket_center)
-
     def get_batch(
         self,
         graph_index: torch.Tensor,
-        pocket_mask: bool = True,
+        skip_degenerate: bool = True,
     ):
         """
         Get batch of protein graphs and corresponding batch of ligand graphs based on index.
+
+        The pocket itself is not set here: `ProteinEncoder.forward` derives it from the
+        ligand coordinates it is handed, so training and inference share one definition.
+
         Args:
             graph_index (torch.Tensor): index of protein-ligand pairs.
-            pocket_mask (bool, optional): if True, generates random pocket mask for protein graphs.
+            skip_degenerate (bool, optional): if True, drop pairs with no protein atom
+                within the interaction radius of the ligand (see `set_proximal_atom_masks`).
+                Such pairs have no pocket for the encoder to voxelise.
 
         Returns:
             (Batch, Batch): PyG batches of protein graphs and corresponding ligand graphs
@@ -212,29 +184,24 @@ class ProteinLigandDataLoader:
         mol_list = []
 
         for g_idx in graph_index:
-            protein_graph = self.proteins[g_idx.item()].clone()
-            if pocket_mask is True:
-                mask = self.get_random_pocket(protein_graph)
+            g_i = g_idx.item()
 
-                if mask is None:
-                    continue
+            if skip_degenerate and not self.proteins[g_i].proximal.any():
+                continue
 
-                protein_graph.pocket_mask = mask
-            protein_list.append(protein_graph)
-
-            mol_graph = self.ligands[g_idx.item()].clone()
-            mol_list.append(mol_graph)
+            protein_list.append(self.proteins[g_i].clone())
+            mol_list.append(self.ligands[g_i].clone())
 
         protein_batch = Batch.from_data_list(protein_list)
         mol_batch = Batch.from_data_list(mol_list)
 
         return protein_batch, mol_batch
 
-    def get_random_batch(self, pocket_mask: bool = True) -> Batch:
+    def get_random_batch(self, skip_degenerate: bool = True) -> Batch:
         """
         Get a random batch of protein graphs and corresponding batch of ligand graphs.
         Args:
-            pocket_mask (bool, optional): if True, generates random pocket mask for protein graphs.
+            skip_degenerate (bool, optional): see `get_batch`.
 
         Returns:
             (Batch, Batch): PyG batches of protein graphs and corresponding ligand graphs
@@ -245,7 +212,7 @@ class ProteinLigandDataLoader:
             self.batch_iterator = self.new_batch_iterator()
             random_index = next(self.batch_iterator)
 
-        return self.get_batch(random_index, pocket_mask)
+        return self.get_batch(random_index, skip_degenerate)
 
 
 class TrainingOutputHandler:

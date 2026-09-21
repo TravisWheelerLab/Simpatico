@@ -163,25 +163,30 @@ def contrastive_loss(
         logits_external = (a_f32 @ hard_l_f32.t()) / temperature
 
     # --- Masks ---
-    phys_dists = torch.cdist(a_coords, s_coords)
-    batch_mask = a_batch.unsqueeze(1) == s_batch.unsqueeze(0)
-    proximal_mask = phys_dists < phys_dist_threshold
-    eye_mask = torch.eye(N, device=device, dtype=torch.bool)
+    # Built in one N*N buffer under no_grad. The masks carry no gradient, and materialising
+    # phys_dists / batch_mask / eye_mask separately costs several N*N tensors that peak
+    # memory cannot afford at larger batch sizes. Values are identical to the expanded form:
+    #   struct_mask = (~batch_mask) | (proximal_mask & ~eye_mask)
     labels_local = torch.arange(N, device=device)
+    with torch.no_grad():
+        struct_mask = torch.cdist(a_coords, s_coords) < phys_dist_threshold  # proximal_mask
+        struct_mask.diagonal().fill_(False)                                  # & ~eye_mask
+        struct_mask |= a_batch.unsqueeze(1) != s_batch.unsqueeze(0)          # | ~batch_mask
 
     # ==============================================================================
     # COMPONENT 1: Structural Loss (Intra-Molecule)
     # ==============================================================================
-    struct_mask = (~batch_mask) | (proximal_mask & ~eye_mask)
-    logits_struct = logits_local.masked_fill(struct_mask, -1e9)
-    loss_struct = F.cross_entropy(logits_struct, labels_local)
+    # The diagonal is read before the fill, so logits_local can be masked in place rather
+    # than copied into a second N*N float tensor.
+    pos_logits = torch.diag(logits_local).unsqueeze(1)
+    logits_local.masked_fill_(struct_mask, -1e9)
+    loss_struct = F.cross_entropy(logits_local, labels_local)
 
     # ==============================================================================
     # COMPONENT 2: Balanced Inter-Molecular Loss (Hard Window + Random Buffer)
     # ==============================================================================
 
-    # A. Positive Scores (Diagonal of Local)
-    pos_logits = torch.diag(logits_local).unsqueeze(1)
+    # A. Positive Scores (diagonal of logits_local, captured above before the in-place fill)
 
     # B. Hard Mining (Rank Window)
     # Search Horizon: limited to 2048 atoms or total size M

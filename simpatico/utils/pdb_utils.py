@@ -71,7 +71,16 @@ def pdb2pyg(pdb_path, ligand_pos=None, pocket_coords=None) -> Data:
     chain_vals = []
     res_numbers = []
 
-    for atom in pdb_structure.get_atoms():
+    # Only the first model. NMR ensembles carry up to 21 MODEL records, and iterating the
+    # whole structure concatenates every conformation into one point cloud -- 6h8c becomes
+    # 16,680 atoms instead of 1,097, with 17x the ligand contacts.
+    if hasattr(pdb_structure, "get_models"):
+        models = list(pdb_structure.get_models())
+        atom_source = models[0] if models else pdb_structure
+    else:
+        atom_source = pdb_structure
+
+    for atom in atom_source.get_atoms():
         if atom.element == 'H':
             continue
         if is_aa(atom.get_parent()) == False:
@@ -100,15 +109,10 @@ def pdb2pyg(pdb_path, ligand_pos=None, pocket_coords=None) -> Data:
         g = trim_protein_graph(g, ligand_pos)
 
     if pocket_coords is not None:
-        pocket_mask = torch.zeros(len(g.x)).bool()
-
-        close_enough = radius(pocket_coords, g.pos, 5)[0].unique()
-        pocket_mask[close_enough] = True
-
-        too_close = radius(pocket_coords, g.pos, 2)[0].unique()
-        pocket_mask[too_close] = False
-
-        g.pocket_mask = pocket_mask
+        # Record the coordinates the pocket is defined by rather than a mask over them.
+        # ProteinEncoder.forward derives the pocket from these at embed time, so a cached
+        # graph carries everything needed to reproduce the pocket it was built for.
+        g.pocket_coords = torch.as_tensor(pocket_coords).float()
 
     return g
 

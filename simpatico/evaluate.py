@@ -177,6 +177,8 @@ def get_input_data_loader(input_line: list[str], args: argparse.ArgumentParser):
     else:
         pocket_data = None
 
+    pocket_spec = None
+
     if args.protein:
         # if single protein structural file is input, path to pocket coordinate file is supplied in args
         if args.pocket_id:
@@ -191,15 +193,24 @@ def get_input_data_loader(input_line: list[str], args: argparse.ArgumentParser):
 
             pocket_spec = pocket_ligand.pos
         else:
-            if structure_is_pyg is False:
-                pocket_spec_file = pocket_data or args.pocket_coordinates
+            pocket_spec_file = pocket_data or args.pocket_coordinates
+            if pocket_spec_file is not None:
                 pocket_spec = get_xyz_from_file(pocket_spec_file)
 
     if structure_is_pyg:
         print(structure_file)
         input_g = torch.load(structure_file, weights_only=False)
         # input_g = pickle.load(open(structure_file,'rb'))
+
+        # a graph cached by pdb2pyg carries the coordinates its pocket was defined by
+        if args.protein and pocket_spec is None:
+            pocket_spec = getattr(input_g, "pocket_coords", None)
     elif args.protein:
+        if pocket_spec is None:
+            sys.exit(
+                f"No pocket specified for {structure_file}. Supply one with "
+                "--pocket-coordinates, --pocket-id, or a second column in the input list."
+            )
         input_g = pdb2pyg(structure_file, pocket_coords=pocket_spec)
         input_g = Batch.from_data_list([input_g])
     elif args.molecule:
@@ -207,6 +218,7 @@ def get_input_data_loader(input_line: list[str], args: argparse.ArgumentParser):
 
     input_data_loader = DataLoader(input_g, batch_size=1024, shuffle=False)
     input_data_loader.source_file = structure_file
+    input_data_loader.pocket_spec = pocket_spec
 
     return input_data_loader
 
@@ -225,18 +237,39 @@ def evaluate_data(input_data_loader, outfile, encoder, args):
     embed_failed = False
     data_out = []
 
+    pocket_spec = getattr(input_data_loader, "pocket_spec", None)
+
+    if args.protein and pocket_spec is None:
+        log.warning("No pocket specified for %s", input_data_loader.source_file)
+        embed_failed = True
+
+    if args.protein and not embed_failed:
+        # ProteinEncoder derives the pocket from these coordinates, the same way it does
+        # during training and in decoy_eval.
+        pocket_coords = Data(pos=torch.as_tensor(pocket_spec).float())
+        pocket_coords.batch = torch.zeros(len(pocket_coords.pos), dtype=torch.long)
+        pocket_coords = pocket_coords.to(args.device)
+
     for batch in input_data_loader:
-        if args.protein:
-            if hasattr(batch, "pocket_mask") == False:
-                log.warning(
-                    "No pocket mask specified for %s", input_data_loader.source_file
-                )
-                embed_failed = True
-                break
+        if embed_failed:
+            break
+
+        if args.protein and getattr(batch, "num_graphs", 1) != 1:
+            # one pocket spec cannot be shared across several protein graphs
+            log.error(
+                "%s holds %s protein graphs; embed them one at a time.",
+                input_data_loader.source_file,
+                batch.num_graphs,
+            )
+            embed_failed = True
+            break
 
         with torch.no_grad():
             try:
-                embeds = encoder(batch.to(args.device))
+                if args.protein:
+                    embeds = encoder(batch.to(args.device), pocket_coords)
+                else:
+                    embeds = encoder(batch.to(args.device))
             except Exception as e:
                 log.error("Error during embedding: %s", e)
                 traceback.print_exc()

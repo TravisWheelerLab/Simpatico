@@ -109,6 +109,8 @@ def contrastive_loss(
     hard_l_embeddings,
     prot_anchor=True,
     temperature=0.2,
+    temperature_struct=None,
+    temperature_hard=None,
     interaction_radius=4.0,
     phys_dist_threshold=6.0,
     window_size=100,
@@ -159,8 +161,18 @@ def contrastive_loss(
         # hard_l_f32 = F.normalize(hard_l_f32, p=2, dim=1)
 
         # 1. Compute Local Logits (FP32)
-        logits_local = (a_f32 @ s_f32.t()) / temperature
-        logits_external = (a_f32 @ hard_l_f32.t()) / temperature
+        # The two losses take independent temperatures. The raw diagonal similarity is captured
+        # BEFORE scaling, because the positive score used by the hard-negative loss must be on
+        # the hard temperature's scale -- reusing the struct-scaled diagonal would put positive
+        # and negatives on different scales inside one cross-entropy, and whichever temperature
+        # was smaller would dominate the loss regardless of the embeddings.
+        t_struct = temperature if temperature_struct is None else temperature_struct
+        t_hard = temperature if temperature_hard is None else temperature_hard
+        logits_local = a_f32 @ s_f32.t()
+        pos_raw = logits_local.diagonal().clone()
+        logits_local.div_(t_struct)
+        logits_external = a_f32 @ hard_l_f32.t()
+        logits_external.div_(t_hard)
 
     # --- Masks ---
     # Built in one N*N buffer under no_grad. The masks carry no gradient, and materialising
@@ -178,7 +190,7 @@ def contrastive_loss(
     # ==============================================================================
     # The diagonal is read before the fill, so logits_local can be masked in place rather
     # than copied into a second N*N float tensor.
-    pos_logits = torch.diag(logits_local).unsqueeze(1)
+    pos_logits = (pos_raw / t_hard).unsqueeze(1)
     logits_local.masked_fill_(struct_mask, -1e9)
     loss_struct = F.cross_entropy(logits_local, labels_local)
 
@@ -235,7 +247,8 @@ def contrastive_loss(
     )
 
 
-def training_step(data_loader, protein_encoder, mol_encoder, hard_batch_scheduler):
+def training_step(data_loader, protein_encoder, mol_encoder, hard_batch_scheduler,
+                  temperature_struct=None, temperature_hard=None):
     device = next(protein_encoder.parameters()).device
 
     protein_batch, molecule_batch = data_loader.get_random_batch()
@@ -265,6 +278,8 @@ def training_step(data_loader, protein_encoder, mol_encoder, hard_batch_schedule
             molecule_batch.batch,
             hard_out,
             prot_anchor,
+            temperature_struct=temperature_struct,
+            temperature_hard=temperature_hard,
         )
 
         if total_loss is None:
@@ -372,6 +387,8 @@ def validate(
     hard_batch_scheduler,
     difficulty_value=1,
     batch_size=16,
+    temperature_struct=None,
+    temperature_hard=None,
 ):
     validation_loss_vals = []
     screen_test = ScreenTest()
@@ -384,7 +401,8 @@ def validate(
     for batch_idx in range(batch_count):
         with torch.no_grad():
             loss, embed_data, _ = training_step(
-                data_loader, protein_encoder, mol_encoder, hard_batch_scheduler
+                data_loader, protein_encoder, mol_encoder, hard_batch_scheduler,
+                temperature_struct=temperature_struct, temperature_hard=temperature_hard
             )
             screen_test.add(*embed_data)
             validation_loss_vals.append(loss.item())
@@ -492,6 +510,12 @@ def main(args):
         target_metric=0.10,  # Target: Positive is in the top 10% of candidates
     )
 
+    # independent temperatures for the two contrastive losses; both default to the previous
+    # single value so existing configs reproduce exactly
+    t_struct_cfg = train_params.get("temperature_struct", train_params.get("temperature", 0.2))
+    t_hard_cfg = train_params.get("temperature_hard", train_params.get("temperature", 0.2))
+    log.info(f"temperature: struct {t_struct_cfg} | hard-negative {t_hard_cfg}")
+
     optimizer = torch.optim.AdamW(
         list(protein_encoder.parameters()) + list(mol_encoder.parameters()),
         lr=train_params["learning_rate"],
@@ -511,7 +535,8 @@ def main(args):
 
         for batch_idx in range(train_loader.size // BATCH_SIZE):
             loss, _, loss_metrics = training_step(
-                train_loader, protein_encoder, mol_encoder, batch_scheduler
+                train_loader, protein_encoder, mol_encoder, batch_scheduler,
+                temperature_struct=t_struct_cfg, temperature_hard=t_hard_cfg
             )
 
             mean_rank = loss_metrics[0][0]
@@ -554,7 +579,8 @@ def main(args):
         epoch_rank_vals = []
 
         epoch_validation_loss, epoch_acc = validate(
-            validation_loader, protein_encoder, mol_encoder, batch_scheduler
+            validation_loader, protein_encoder, mol_encoder, batch_scheduler,
+            temperature_struct=t_struct_cfg, temperature_hard=t_hard_cfg
         )
 
         log.info(

@@ -469,7 +469,18 @@ def main(args):
         data_corpus, train_params['validation_file'], train_params["holdout_file"]
     )
 
-    train_loader = ProteinLigandDataLoader(train_data, batch_size=BATCH_SIZE)
+    # node masking; both default to 0 so existing configs reproduce exactly
+    p_mask_protein = float(train_params.get("p_mask_protein", 0.0))
+    p_mask_ligand = float(train_params.get("p_mask_ligand", 0.0))
+
+    train_loader = ProteinLigandDataLoader(
+        train_data,
+        batch_size=BATCH_SIZE,
+        p_mask_protein=p_mask_protein,
+        p_mask_ligand=p_mask_ligand,
+    )
+    # Validation is left unmasked on purpose, so validation loss, accuracy and mean rank
+    # stay comparable across p_mask settings.
     validation_loader = ProteinLigandDataLoader(validation_data, batch_size=BATCH_SIZE)
 
     protein_encoder = ProteinEncoder().to(device)
@@ -515,6 +526,10 @@ def main(args):
     t_struct_cfg = train_params.get("temperature_struct", train_params.get("temperature", 0.2))
     t_hard_cfg = train_params.get("temperature_hard", train_params.get("temperature", 0.2))
     log.info(f"temperature: struct {t_struct_cfg} | hard-negative {t_hard_cfg}")
+    log.info(
+        f"node masking: protein atoms dropped at p={p_mask_protein} | ligand atom features "
+        f"zeroed at p={p_mask_ligand} (training only; validation unmasked)"
+    )
 
     optimizer = torch.optim.AdamW(
         list(protein_encoder.parameters()) + list(mol_encoder.parameters()),

@@ -88,17 +88,40 @@ class ProteinLigandDataLoader:
     Args:
         pl_graph_pairs (List[(Data, Data)]): List of protein-ligand graph pairs.
         batch_size (int): batch size
+        p_mask_protein (float, optional): probability that a protein atom is REMOVED from
+            the graph at batch time. 0 disables masking.
+        p_mask_ligand (float, optional): probability that a ligand atom's features are
+            ZEROED at batch time -- the atom, its position and its bonds are kept, so the
+            molecule stays intact. Applied to positives and hard negatives alike.
+            0 disables masking.
 
     Attributes:
         proteins (List[Data]): N-length list of proteins
         ligands (List[Data]): N-length list of ligands
         batch_size (int): batch size
+        p_mask_protein (float)
+        p_mask_ligand (float)
     """
 
-    def __init__(self, pl_graph_pairs: List[Data], batch_size: int):
+    # Protein atoms are removed outright, so a floor keeps enough of them for the encoder
+    # to voxelise a pocket. Ligand atoms are only zeroed -- the graph keeps its size either
+    # way -- so the ligand floor just guarantees some atom identity stays visible rather
+    # than leaving pure topology.
+    MIN_PROTEIN_NODES = 16
+    MIN_VISIBLE_LIGAND_NODES = 1
+
+    def __init__(
+        self,
+        pl_graph_pairs: List[Data],
+        batch_size: int,
+        p_mask_protein: float = 0.0,
+        p_mask_ligand: float = 0.0,
+    ):
         self.proteins = []
         self.ligands = []
         self.batch_size = batch_size
+        self.p_mask_protein = p_mask_protein
+        self.p_mask_ligand = p_mask_ligand
 
         for p_graph, l_graph in pl_graph_pairs:
             self.proteins.append(p_graph)
@@ -117,6 +140,14 @@ class ProteinLigandDataLoader:
             if blacklist is not None:
                 if lig.ligand_id in blacklist:
                    continue
+            # Hard negatives are masked at the same rate as the positive ligands. If only
+            # positives carried zeroed rows, masked atoms would sit in a region of
+            # embedding space that negatives never occupy, and the encoder could separate
+            # them on that alone instead of learning to infer an atom from its context.
+            if self.p_mask_ligand > 0:
+                lig = graph_utils.zero_node_features(
+                    lig, self.p_mask_ligand, min_visible=self.MIN_VISIBLE_LIGAND_NODES
+                )
             mol_batch.append(lig)
             if len(mol_batch) >= n:
                 break
@@ -189,8 +220,26 @@ class ProteinLigandDataLoader:
             if skip_degenerate and not self.proteins[g_i].proximal.any():
                 continue
 
-            protein_list.append(self.proteins[g_i].clone())
-            mol_list.append(self.ligands[g_i].clone())
+            # `skip_degenerate` above tests the stored graph, so masking cannot corrupt
+            # that decision. `require` then keeps at least one contact atom alive, since a
+            # pair whose pocket is entirely removed has nothing for the encoder to voxelise.
+            protein_list.append(
+                graph_utils.drop_nodes(
+                    self.proteins[g_i].clone(),
+                    self.p_mask_protein,
+                    min_nodes=self.MIN_PROTEIN_NODES,
+                    require=self.proteins[g_i].proximal,
+                )
+            )
+            # Ligand atoms are zeroed, never dropped: removing them would sever bonds and
+            # leave a fragment that is no longer the compound being screened.
+            mol_list.append(
+                graph_utils.zero_node_features(
+                    self.ligands[g_i].clone(),
+                    self.p_mask_ligand,
+                    min_visible=self.MIN_VISIBLE_LIGAND_NODES,
+                )
+            )
 
         protein_batch = Batch.from_data_list(protein_list)
         mol_batch = Batch.from_data_list(mol_list)

@@ -9,7 +9,7 @@ setup(
         "simpatico.data": ["*.json"],
         "simpatico.models.molecule_encoder": ["*.json"],
         "simpatico.models.protein_encoder": ["*.json"],
-        "simpatico.models.weights": ["*.pt"],
+        "simpatico.models.weights": ["*.pt", "*.w", "*.json"],
     },
     entry_points={
         "console_scripts": [

@@ -16,8 +16,18 @@ from rdkit.Chem.rdDetermineBonds import DetermineConnectivity
 
 
 
-def trim_protein_graph(protein_graph, target_pos, r=12.5):
-    proximal_atoms = radius(target_pos, protein_graph.pos, 12.5)[0].unique()
+def trim_protein_graph(protein_graph, target_pos, r=15.0):
+    """Keep protein atoms within `r` of the target.
+
+    r=15.0, not 12.5. ProteinEncoder masks to atoms within 6 A of the ligand and then gathers
+    context within 8 A of those, so its receptive field reaches ~14 A; a 12.5 A trim clips it
+    and yields DIFFERENT encoder output than the untrimmed graph the eval path builds. Verified
+    on 10gs/11gs/13gs/1a30: at 15 A the voxel embeddings are identical to untrimmed, at 12.5 A
+    they are not.
+
+    `r` was also previously ignored -- the radius call hardcoded 12.5, so the parameter had no
+    effect."""
+    proximal_atoms = radius(target_pos, protein_graph.pos, r)[0].unique()
 
     protein_graph.x = protein_graph.x[proximal_atoms]
     protein_graph.pos = protein_graph.pos[proximal_atoms]
@@ -71,7 +81,16 @@ def pdb2pyg(pdb_path, ligand_pos=None, pocket_coords=None) -> Data:
     chain_vals = []
     res_numbers = []
 
-    for atom in pdb_structure.get_atoms():
+    # Only the first model. NMR ensembles carry up to 21 MODEL records, and iterating the
+    # whole structure concatenates every conformation into one point cloud -- 6h8c becomes
+    # 16,680 atoms instead of 1,097, with 17x the ligand contacts.
+    if hasattr(pdb_structure, "get_models"):
+        models = list(pdb_structure.get_models())
+        atom_source = models[0] if models else pdb_structure
+    else:
+        atom_source = pdb_structure
+
+    for atom in atom_source.get_atoms():
         if atom.element == 'H':
             continue
         if is_aa(atom.get_parent()) == False:
@@ -100,15 +119,10 @@ def pdb2pyg(pdb_path, ligand_pos=None, pocket_coords=None) -> Data:
         g = trim_protein_graph(g, ligand_pos)
 
     if pocket_coords is not None:
-        pocket_mask = torch.zeros(len(g.x)).bool()
-
-        close_enough = radius(pocket_coords, g.pos, 5)[0].unique()
-        pocket_mask[close_enough] = True
-
-        too_close = radius(pocket_coords, g.pos, 2)[0].unique()
-        pocket_mask[too_close] = False
-
-        g.pocket_mask = pocket_mask
+        # Record the coordinates the pocket is defined by rather than a mask over them.
+        # ProteinEncoder.forward derives the pocket from these at embed time, so a cached
+        # graph carries everything needed to reproduce the pocket it was built for.
+        g.pocket_coords = torch.as_tensor(pocket_coords).float()
 
     return g
 

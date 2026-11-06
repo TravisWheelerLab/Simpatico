@@ -43,42 +43,44 @@ def handle_no_overwrite(outfile: str) -> bool:
         return True
 
 
-def report_results(query_output: Tuple) -> None:
+def report_results(query_output, limit: int = 0) -> None:
     """
-    Print human-readable results from vector database query/screen.
+    Print human-readable results from a `simpatico query` screen.
+
+    `query` writes one pickle per database file: a list holding one (scores, indices) pair
+    per query, where `indices` are positions in that database file and `scores` the matching
+    aggregate scores. Only molecules that cleared the query's background threshold appear, so
+    the list is usually far shorter than the library.
+
+    The earlier format was a 3-tuple of (queries, vector_db, results) carrying the source
+    filenames, and this function unpacked it as such; against the current output that raised
+    `ValueError: not enough values to unpack`. Source filenames are no longer in the pickle --
+    the file is named after its database file instead -- so rows identify the query by index.
+
     Args:
-        query_output (Tuple): query indexes, database indexes, and the list of sorted per-item results.
+        query_output: the object unpickled from a results file.
+        limit (int): print at most this many rows per query; 0 prints all.
     Returns:
         (None): prints output
     """
-    queries, vector_db, results = query_output
-    target_list = ">query sources:\n"
-    db_list = ">db sources:\n"
-    results_content = ">results:\n"
+    if isinstance(query_output, tuple) and len(query_output) == 3:
+        raise ValueError(
+            "This looks like a pre-threshold results file (a 3-tuple of queries, vector_db, "
+            "results). Re-run `simpatico query` to produce the current format."
+        )
 
-    for t_i, file_string in enumerate(queries["sources"]):
-        target_list += f"{t_i+1} {file_string}\n"
-
-    for d_i, file_string in enumerate(vector_db["sources"]):
-        db_list += f"{d_i+1} {file_string}\n"
-
-    for qi, result_vals in enumerate(results):
-        rank = 1
-        q_item_index = queries["item_batch"] == qi
-        q_source_idx = queries["file_batch"][q_item_index][0].item()
-        q_source_item_idx = queries["source_index"][q_item_index][0].item()
-
-        for result_idx in result_vals[1]:
-            r_idx = result_idx.item()
-            r_item_index = vector_db["item_batch"] == r_idx
-            r_source_idx = vector_db["file_batch"][r_item_index][0].item()
-            r_source_item_idx = vector_db["source_index"][r_item_index][0].item()
-
-            results_content += f"{q_source_idx+1} {q_source_item_idx+1} {r_source_idx+1} {r_source_item_idx+1} {rank}\n"
-            rank += 1
-
-    output = target_list + db_list + results_content
-    print(output)
+    print("# query\tmolecule\tscore\trank")
+    for qi, entry in enumerate(query_output):
+        scores, indices = entry
+        scores = [float(s) for s in scores]
+        indices = [int(i) for i in indices]
+        order = sorted(range(len(scores)), key=lambda k: -scores[k])
+        if limit:
+            order = order[:limit]
+        for rank, k in enumerate(order, 1):
+            print(f"{qi}\t{indices[k]}\t{scores[k]:.4f}\t{rank}")
+        if not order:
+            print(f"# query {qi}: no molecule cleared the score threshold")
 
 
 class ProteinLigandDataLoader:
@@ -95,35 +97,194 @@ class ProteinLigandDataLoader:
         batch_size (int): batch size
     """
 
-    def __init__(self, pl_graph_pairs: List[Data], batch_size: int):
+    def __init__(self, pl_graph_pairs: List[Data], batch_size: int,
+                 negative_pool: Optional[List[Data]] = None,
+                 negative_mix: float = 0.0,
+                 surface: bool = False,
+                 surface_cache: Optional[str] = None):
         self.proteins = []
         self.ligands = []
         self.batch_size = batch_size
+        # Hard negatives are drawn from `negative_pool` when supplied, otherwise from the
+        # training ligands themselves. The default means the model learns to reject other
+        # CRYSTAL ligands, while at screening time every negative is a drug-like library
+        # compound -- a distribution mismatch that measurably matters: swapping the validation
+        # pool from crystal ligands to ZINC took the correlation between probe rank and
+        # LIT-PCBA EF from -0.69 to -0.82.
+        self.negative_pool = negative_pool
+        # Fraction of each negative batch drawn from `negative_pool` rather than from the
+        # crystal ligands. A ZINC-only pool (mix 1.0) flattened the library -- ALDH1 AUROC
+        # 0.482, i.e. chance -- because InfoNCE then had nothing to keep true binders apart
+        # from each other. Mixing keeps both claims in the objective: reject library compounds,
+        # and still distinguish one crystal binder from another.
+        self.negative_mix = 0.0 if negative_pool is None else float(negative_mix)
 
         for p_graph, l_graph in pl_graph_pairs:
             self.proteins.append(p_graph)
             self.ligands.append(l_graph)
 
         self.size = len(self.proteins)
+        # Entries drawn per epoch. Equals `size` unless a pocket cap is set, which trims the
+        # over-represented sites -- see set_pocket_caps.
+        self.epoch_size = self.size
+        self.pocket_cap = 0
+        self.pocket_groups = None
         self.batch_iterator = self.new_batch_iterator()
         self.set_proximal_atom_masks()
+        if surface:
+            self.set_surface_masks(surface_cache)
+
+    def set_surface_masks(self, cache_file: Optional[str] = None):
+        """Attach `surface` (per-atom boolean) to every protein graph.
+
+        Computed once here rather than inside ProteinEncoder.forward: the mask depends only on
+        coordinates, so it is constant across epochs, and running Shrake-Rupley every step
+        would add ~0.4 s to a batch of 16. The 0.25 A coordinate jitter training_step applies
+        is far below the exposed/buried decision boundary, so the precomputed mask stays valid.
+
+        Cached to `cache_file` keyed by graph name, so a restart pays nothing.
+        """
+        cache = {}
+        if cache_file and os.path.exists(cache_file) and os.path.getsize(cache_file) > 0:
+            cache = torch.load(cache_file, weights_only=False)
+
+        dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        fresh = 0
+        for g in self.proteins:
+            key = getattr(g, "name", None)
+            m = cache.get(key) if key is not None else None
+            if m is None or m.numel() != g.pos.size(0):
+                m = graph_utils.surface_mask(g.pos.to(dev).float()).cpu()
+                fresh += 1
+                if key is not None:
+                    cache[key] = m
+            g.surface = m
+        if cache_file and fresh:
+            torch.save(cache, cache_file)
 
     def get_random_ligand_batch(self, n, blacklist=None):
-        mol_batch = []
-        randperm = torch.randperm(len(self.proteins)).tolist()
+        """A batch of negatives: `negative_mix` of it from `negative_pool`, the rest crystal.
 
-        for idx in randperm:
-            lig = self.ligands[idx]
-            if blacklist is not None:
-                if lig.ligand_id in blacklist:
-                   continue
-            mol_batch.append(lig)
+        The pool draw is uniform. The pool itself must also be a uniform sample of its source
+        library -- the MaxMin-diverse libraries under dock_library/ optimise for spread and so
+        over-represent the edges of chemical space, which is the right objective for a
+        SCREENING library and the wrong one for a negative distribution meant to look like what
+        the model will be scored against.
+        """
+        n_pool = int(round(n * self.negative_mix)) if self.negative_pool is not None else 0
+        mol_batch = []
+        if n_pool:
+            idx = torch.randint(0, len(self.negative_pool), (n_pool,)).tolist()
+            mol_batch += [self.negative_pool[i] for i in idx]
+
+        for idx in torch.randperm(len(self.ligands)).tolist():
             if len(mol_batch) >= n:
                 break
+            lig = self.ligands[idx]
+            if blacklist is not None and lig.ligand_id in blacklist:
+                continue
+            mol_batch.append(lig)
         return Batch.from_data_list(mol_batch)
 
 
 
+
+    def set_pocket_ids(self, pocket_file: str):
+        """Attach a pocket-group id to every protein graph, so a batch knows which of its own
+        entries are the SAME binding site.
+
+        Needed by lig_external_pool="protein_inbatch", whose negatives are the other complexes
+        in the batch. Masking the anchor's own complex is not enough: PDBbind solves popular
+        sites repeatedly, so at batch 64 roughly 10% of anchors share a pocket with some other
+        entry in the same batch (3.4 colliding pairs per batch; pairwise probability 0.00166
+        over 6,406 pockets / 19,434 entries). Those are not negatives, they are the anchor's
+        own site under another entry, they rank among the hardest, and at t_hard 0.05 the
+        softmax puts its mass exactly there.
+
+        Same identity source as set_pocket_caps -- MMseqs2 95%/0.8 on chains then split by
+        pocket-residue Jaccard >= 0.5. Entries absent from the map get their own singleton id,
+        the conservative reading: never masked against anything but themselves.
+        """
+        import json
+
+        with open(pocket_file) as f:
+            pk = json.load(f)
+        ent2pocket = {}
+        for pid, grp in enumerate(pk["pockets"]):
+            for e in grp[0]:
+                ent2pocket[e] = pid
+
+        next_id = len(pk["pockets"])
+        unmapped = 0
+        for i, prot in enumerate(self.proteins):
+            eid = str(getattr(prot, "name", i)).split("_")[0]
+            q = ent2pocket.get(eid)
+            if q is None:
+                q, next_id, unmapped = next_id, next_id + 1, unmapped + 1
+            prot.pocket_gid = torch.tensor([q], dtype=torch.long)
+        return {"pockets": len(pk["pockets"]), "unmapped": unmapped}
+
+    def set_pocket_caps(self, pocket_file: str, cap: int):
+        """Allow at most `cap` entries from any one pocket per epoch, resampled every epoch.
+
+        PDBbind solves popular targets repeatedly, so uniform sampling over entries spends
+        gradient in proportion to how often a site was crystallised. On the litpcba_s90 split
+        that is severe: 18,948 entries cover 6,262 pockets, 31 pockets (0.5%) take 16.6% of
+        every epoch, the largest is drawn 412 times, and the inverse-Simpson effective pocket
+        count is 562 -- 9% of the nominal 6,262.
+
+        A cap rather than inverse-frequency weights, because the redundancy is in the POCKET
+        and not the ligand: those 31 pockets carry 2,811 distinct ligands across 3,137 entries,
+        89.6% unique. Permanently downweighting them would discard real ligand diversity.
+        Re-drawing which `cap` entries appear each epoch bounds per-epoch exposure while still
+        walking the whole ligand set over a run -- at cap 10 the 412-entry pocket is fully
+        covered in 42 epochs and never exceeds ~14 draws in any one.
+
+        Pocket identity comes from pocket_census/pockets_j0.5.json: MMseqs2 95% identity / 0.8
+        coverage on chains, then split by pocket-residue Jaccard >= 0.5 so an active site and
+        an allosteric site on one protein count separately. Entries absent from the map get
+        their own singleton pocket, which is the conservative reading (never over-capped).
+
+        SET `epochs` BY STEP BUDGET, NOT BY EPOCH COUNT. Capping shortens the epoch, so a run
+        compared at equal EPOCHS against an uncapped one silently gets a smaller training
+        budget and the cap's effect is confounded with undertraining. On the litpcba_s90 split:
+
+            cap    epoch entries   % of full   steps/epoch @ bs 64   epochs for 14,800 steps
+            none          18,948      100.0%                   296                        50
+              25          15,961       84.2%                   249                        59
+              10          13,432       70.9%                   209                        71
+               5          11,189       59.1%                   174                        85
+
+        This sets `epoch_size`, which train.py's epoch loop must use -- `size` would
+        over-request batches and silently restart the iterator part-way through an epoch.
+        """
+        import json
+        from collections import defaultdict
+
+        with open(pocket_file) as f:
+            pk = json.load(f)
+        ent2pocket = {}
+        for pid, grp in enumerate(pk["pockets"]):
+            for e in grp[0]:
+                ent2pocket[e] = pid
+
+        groups = defaultdict(list)
+        unmapped = 0
+        for i, prot in enumerate(self.proteins):
+            eid = str(getattr(prot, "name", i)).split("_")[0]
+            q = ent2pocket.get(eid)
+            if q is None:
+                q = ("UNMAPPED", eid)
+                unmapped += 1
+            groups[q].append(i)
+
+        self.pocket_groups = list(groups.values())
+        self.pocket_cap = int(cap)
+        self.epoch_size = sum(min(len(g), self.pocket_cap) for g in self.pocket_groups)
+        self.batch_iterator = self.new_batch_iterator()
+        return {"pockets": len(self.pocket_groups), "unmapped": unmapped,
+                "epoch_size": self.epoch_size, "full_size": self.size,
+                "largest_pocket": max(len(g) for g in self.pocket_groups)}
 
     def new_batch_iterator(self):
         """
@@ -132,7 +293,19 @@ class ProteinLigandDataLoader:
         Yields:
             (torch.Tensor): A 1D tensor containing indices for the current batch.
         """
-        random_index = torch.randperm(self.size)
+        if self.pocket_cap and self.pocket_groups is not None:
+            # Fresh draw every epoch, so the capped slots rotate through each pocket's entries.
+            keep = []
+            for g in self.pocket_groups:
+                if len(g) <= self.pocket_cap:
+                    keep.extend(g)
+                else:
+                    sel = torch.randperm(len(g))[: self.pocket_cap].tolist()
+                    keep.extend(g[i] for i in sel)
+            random_index = torch.tensor(keep, dtype=torch.long)
+            random_index = random_index[torch.randperm(len(random_index))]
+        else:
+            random_index = torch.randperm(self.size)
         for i in range(0, len(random_index), self.batch_size):
             yield random_index[i : i + self.batch_size]
 
@@ -159,50 +332,22 @@ class ProteinLigandDataLoader:
         """
         return torch.randperm(mol_batch.x.size(0))
 
-    def get_random_pocket(self, protein_graph: Data) -> torch.Tensor:
-        """
-        Selects random pocket coordinates based on graph's 'proximal' mask as pocket center
-        Args:
-            protein_graph (Data): protein graph
-        Returns:
-            (torch.Tensor): boolean mask to indicate pocket surface atoms
-        """
-        pocket_atoms = torch.where(protein_graph.proximal)[0]
-
-        if pocket_atoms.size(0) == 0:
-            return None
-
-        pocket_atoms_pos = protein_graph.pos[pocket_atoms]
-        random_pocket_atom = torch.randperm(pocket_atoms.size(0))[0]
-
-        # get a local cluster of surface atoms which will be used to weight the location of the pocket
-        random_pocket_neighbors = radius(
-            pocket_atoms_pos, pocket_atoms_pos[random_pocket_atom], 5
-        )[1].unique()
-
-        # get weights to produce a randomized average of pocket atom locations
-        # weight values should sum to 1 to produce a proper average
-        random_pos_coefficients = torch.rand(random_pocket_neighbors.size(0))
-        random_pos_coefficients /= random_pos_coefficients.sum()
-        random_pos_coefficients = random_pos_coefficients.unsqueeze(1)
-
-        # set pocket center to randomized average of pocket atom locations
-        pocket_center = (
-            pocket_atoms_pos[random_pocket_neighbors] * random_pos_coefficients
-        ).sum(0)
-
-        return graph_utils.get_pocket_mask(protein_graph, pocket_center)
-
     def get_batch(
         self,
         graph_index: torch.Tensor,
-        pocket_mask: bool = True,
+        skip_degenerate: bool = True,
     ):
         """
         Get batch of protein graphs and corresponding batch of ligand graphs based on index.
+
+        The pocket itself is not set here: `ProteinEncoder.forward` derives it from the
+        ligand coordinates it is handed, so training and inference share one definition.
+
         Args:
             graph_index (torch.Tensor): index of protein-ligand pairs.
-            pocket_mask (bool, optional): if True, generates random pocket mask for protein graphs.
+            skip_degenerate (bool, optional): if True, drop pairs with no protein atom
+                within the interaction radius of the ligand (see `set_proximal_atom_masks`).
+                Such pairs have no pocket for the encoder to voxelise.
 
         Returns:
             (Batch, Batch): PyG batches of protein graphs and corresponding ligand graphs
@@ -212,29 +357,24 @@ class ProteinLigandDataLoader:
         mol_list = []
 
         for g_idx in graph_index:
-            protein_graph = self.proteins[g_idx.item()].clone()
-            if pocket_mask is True:
-                mask = self.get_random_pocket(protein_graph)
+            g_i = g_idx.item()
 
-                if mask is None:
-                    continue
+            if skip_degenerate and not self.proteins[g_i].proximal.any():
+                continue
 
-                protein_graph.pocket_mask = mask
-            protein_list.append(protein_graph)
-
-            mol_graph = self.ligands[g_idx.item()].clone()
-            mol_list.append(mol_graph)
+            protein_list.append(self.proteins[g_i].clone())
+            mol_list.append(self.ligands[g_i].clone())
 
         protein_batch = Batch.from_data_list(protein_list)
         mol_batch = Batch.from_data_list(mol_list)
 
         return protein_batch, mol_batch
 
-    def get_random_batch(self, pocket_mask: bool = True) -> Batch:
+    def get_random_batch(self, skip_degenerate: bool = True) -> Batch:
         """
         Get a random batch of protein graphs and corresponding batch of ligand graphs.
         Args:
-            pocket_mask (bool, optional): if True, generates random pocket mask for protein graphs.
+            skip_degenerate (bool, optional): see `get_batch`.
 
         Returns:
             (Batch, Batch): PyG batches of protein graphs and corresponding ligand graphs
@@ -245,7 +385,7 @@ class ProteinLigandDataLoader:
             self.batch_iterator = self.new_batch_iterator()
             random_index = next(self.batch_iterator)
 
-        return self.get_batch(random_index, pocket_mask)
+        return self.get_batch(random_index, skip_degenerate)
 
 
 class TrainingOutputHandler:

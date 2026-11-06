@@ -1,6 +1,5 @@
 from typing import List
 from torch_geometric.nn import radius
-from torch_geometric.data import Data
 import torch
 
 
@@ -27,35 +26,70 @@ def get_proximal_atom_masks(
     return protein_mask, ligand_mask
 
 
-def get_pocket_mask(
-    protein_graph: Data, center: torch.Tensor, pocket_dim: int = 20
+def _sphere_points(n: int, device, dtype) -> torch.Tensor:
+    """`n` roughly-equidistant points on the unit sphere (Fibonacci / golden spiral)."""
+    i = torch.arange(n, device=device, dtype=dtype) + 0.5
+    phi = torch.acos(1 - 2 * i / n)
+    theta = torch.pi * (1 + 5**0.5) * i
+    return torch.stack(
+        [theta.cos() * phi.sin(), theta.sin() * phi.sin(), phi.cos()], dim=1
+    )
+
+
+def surface_mask(
+    pos: torch.Tensor,
+    batch: torch.Tensor = None,
+    probe: float = 1.4,
+    atom_radius: float = 1.8,
+    n_points: int = 92,
+    min_exposure: float = 0.01,
+    max_neighbors: int = 160,
+    edge_chunk: int = 20000,
 ) -> torch.Tensor:
-    """
-    Specify a protein pocket  (i.e. a pocket-surface atom mask) based on voxel box of width, length, and height `pocket_dim`.
+    """Shrake-Rupley solvent exposure, reduced to a boolean per-atom mask.
+
+    A uniform heavy-atom radius is used rather than per-element radii: the output is a binary
+    exposed/buried call, not a surface AREA, and that call is insensitive to the 1.55-1.9 A
+    spread of protein heavy-atom radii. Uniformity also means the mask depends only on `pos`,
+    so it is identical whichever feature representation the graph carries.
+
+    Note this is the local Shrake-Rupley test -- a point is exposed if no OTHER atom covers it.
+    It does not ask whether a probe could reach that point from bulk solvent, which is exactly
+    what we want here: the atoms lining a binding pocket are the ones being kept, and a
+    reachability test run from the outside would have to be told that the pocket counts as
+    outside.
+
     Args:
-        protein_graph (Data): protein PyG graph
-        center (torch.Tensor): center of voxel sphere
-        pocket_dim (int, optional): value used as width, length, and height of pocket box.
+        pos: (N, 3) coordinates.
+        batch: (N,) graph assignment; occlusion is only ever computed within a graph.
+        probe: solvent probe radius.
+        atom_radius: uniform heavy-atom vdW radius.
+        n_points: sphere points per atom; the exposure resolution is 1/n_points.
+        min_exposure: fraction of points that must be unoccluded to call an atom surface.
+            The default 0.01 is "at least one of 92 points", i.e. strictly nonzero SASA.
     Returns:
-        (torch.Tensor): boolean mask specifying pocket surface atoms.
+        (N,) boolean mask, True for surface atoms.
     """
-    zero_centered_range = torch.arange(-int(pocket_dim / 2), int(pocket_dim / 2) + 1)
-    voxel_box = torch.cartesian_prod(*[zero_centered_range] * 3).float()
-    pocket_coords = center + voxel_box
+    device, dtype = pos.device, pos.dtype
+    N = pos.size(0)
+    if batch is None:
+        batch = torch.zeros(N, dtype=torch.long, device=device)
 
-    voxel_filter = torch.zeros(pocket_coords.size(0)).bool()
-    # Only include voxels within 4 angstroms of protein atom
-    voxel_filter[
-        radius(protein_graph.pos, pocket_coords, 4, max_num_neighbors=999)[0].unique()
-    ] = True
-    # Exclude voxels that are closer than 2 angstroms to a protein atom
-    voxel_filter[
-        radius(protein_graph.pos, pocket_coords, 2, max_num_neighbors=999)[0].unique()
-    ] = False
-    pocket_surface_atoms = radius(
-        protein_graph.pos, pocket_coords[voxel_filter], 4, max_num_neighbors=999
-    )[1].unique()
-    pocket_mask = torch.zeros(protein_graph.pos.size(0)).bool()
-    pocket_mask[pocket_surface_atoms] = True
+    R = atom_radius + probe
+    u = _sphere_points(n_points, device, dtype) * R
 
-    return pocket_mask
+    # Two atoms can only occlude each other's probe spheres within 2R.
+    row, col = radius(pos, pos, 2 * R, batch, batch, max_num_neighbors=max_neighbors)
+    keep = row != col
+    row, col = row[keep], col[keep]
+
+    # Occlusion count per (atom, sphere point). Accumulated as float because index_add_ has no
+    # boolean form; any nonzero entry means the point is covered.
+    occ = torch.zeros(N, n_points, device=device, dtype=dtype)
+    for s in range(0, row.numel(), edge_chunk):
+        r, c = row[s : s + edge_chunk], col[s : s + edge_chunk]
+        d2 = (pos[r].unsqueeze(1) + u.unsqueeze(0) - pos[c].unsqueeze(1)).pow(2).sum(-1)
+        occ.index_add_(0, r, (d2 < R * R).to(dtype))
+
+    exposure = (occ == 0).to(dtype).mean(dim=1)
+    return exposure > min_exposure

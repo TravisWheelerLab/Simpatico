@@ -68,8 +68,14 @@ With all dependencies installed, you can now install simpatico itself:
 
 ```bash
 git clone https://github.com/TravisWheelerLab/Simpatico.git
-pip install Simpatico
+pip install ./Simpatico
 ```
+
+A trained checkpoint ships with the package (`simpatico/models/weights/`), along with the
+`arch.json` that records which architecture it was trained with. **Any weights file you point
+Simpatico at needs an `arch.json` beside it** — the loader reads it to decide which encoder to
+build, and without it falls back to library defaults, which will not match a current
+checkpoint.
 
 </details>
 
@@ -98,27 +104,63 @@ To run the query:
 ### Command Usage
 
 ```bash
-simpatico query <input_file> <output_file>
+simpatico query <input_file> <output_dir> -w <weights_file>
 ```
+
+`-w/--weights` is required. The architecture is read from the `arch.json` beside the weights.
 
 ### Example
 
 ```bash
-simpatico query examples/aa2ar_screen/aa2ar_screen_1.csv examples/aa2ar_screen/results/
+simpatico query examples/aa2ar_screen/aa2ar_screen_1.csv examples/aa2ar_screen/results/ \
+    -w simpatico/models/weights/litpcba_s90_s42_e30.w
 ```
 
-This will generate two result files, saved to the `examples/aa2ar_screen/results/` directory, one per small-molecule database specified in the input file. `molecule_library_1_query-results.csv` should look something like this:
+This generates one result file per small-molecule database in the input file, saved to
+`examples/aa2ar_screen/results/`: `molecule_library_1.pkl` and `molecule_library_2.pkl`.
+
+Each file is a pickled list holding one `(scores, indices)` pair per query. `indices` are
+positions within that database file and `scores` the matching aggregate scores. Only molecules
+that clear the query's background score threshold are kept, so the list is normally far shorter
+than the library.
+
+To read one:
+
+```bash
+simpatico print-results examples/aa2ar_screen/results/molecule_library_1.pkl -n 5
+```
 
 ```
-1,11,37.93132781982422
-1,209,34.20753860473633
-1,211,25.427879333496094
-1,145,24.6605281829834
-1,379,24.286479949951172
-...
+# query	molecule	score	rank
+0	279	13.5806	1
+0	225	12.8162	2
+0	30	12.4463	3
+0	10	12.3957	4
+0	399	12.3622	5
 ```
 
-Each row of the results `.csv` has three columns: The query index, small-molecule index, and the score. In effect, for every query included in the input file, each non-zero scoring small molecule is listed in order of score, from highest (best) scoring to lowest score. In our example case, molecules 1-482 from `molecule_library_1.ism` are known actives, and therefore occupy an outsized proportion of high scoring rows.
+Use `-n` to cap rows per query; omit it for all of them. The per-query score threshold is
+estimated from a random sample of the database, so scores shift slightly between runs even on
+identical inputs; the ranking is stable. In our example case, molecules 1-482
+from `molecule_library_1.ism` are known actives, and therefore occupy an outsized proportion of
+high scoring rows.
+
+### Screening a large library in chunks
+
+Every chunk of a split library must be scored against **the same** per-query thresholds, or
+scores from different chunks are not comparable. Compute them once, then reuse:
+
+```bash
+# compute thresholds against the first database file and exit
+simpatico query screen.csv results/ -w <weights> --save-thresholds results/thresholds.pkl
+
+# score every chunk against that saved set
+simpatico query screen.csv results/ -w <weights> --load-thresholds results/thresholds.pkl
+```
+
+`--quantile` sets the background cutoff (default `0.99`). `--skip-existing` resumes a run by
+skipping database files whose results already exist, and requires `--load-thresholds` so the
+resumed files share thresholds with the rest.
 
 </details>
 
@@ -171,11 +213,36 @@ Input for a simpatico training run is stored in the json format. From our exampl
     "output_dir": "examples/train_example/",
     "batch_size": 16,
     "epochs": 1000,
-    "learning_rate": 0.0001
+    "learning_rate": 0.0001,
     "weight_checkpoint_interval": 5
 }
 ```
-`train_handle` specifies a unique string to associate with the weight and log outputs. `data_file` must point to a pickle (`.pkl`) file containing a python list-of-lists. Each list-item in the list contains a protein graph in index 0, and the graph of its bound ligand partner in index 1. We have stored a (very) small sample of graphs from sourced from the PDBBind dataset in `examples/train_example/PDBBIND_sample.pkl`. `validation_file` and `holdout_file` should point to text files that list per-line a substring that may be found in the `.name` attribute of our training graphs (in our case, this is PDB IDs). If the substring is observed, the corresponding sample will be used withheld from the training data and used in the validation set (if listed in the `validation_file`) or simply witheld from training (if listed in the `holdout_file`). `output_dir` specifies where files generated during training run (weights, log files) should be sent. 
+`train_handle` specifies a unique string to associate with the weight and log outputs. `data_file` must point to a pickle (`.pkl`) file containing a python list-of-lists. Each list-item in the list contains a protein graph in index 0, and the graph of its bound ligand partner in index 1. We have stored a (very) small sample of graphs from sourced from the PDBBind dataset in `examples/train_example/PDBBIND_sample.pkl`. `validation_file` and `holdout_file` should point to text files that list per-line a substring that may be found in the `.name` attribute of our training graphs (in our case, this is PDB IDs). If the substring is observed, the corresponding sample will be used withheld from the training data and used in the validation set (if listed in the `validation_file`) or simply witheld from training (if listed in the `holdout_file`). `output_dir` specifies where files generated during training run (weights, log files) should be sent.
+
+### Selecting the architecture
+
+The keys above leave every architectural choice at its default, which reproduces the **original**
+model. To train the current one, add:
+
+```json
+{
+    "pocket_encoder": "pocket",
+    "mol_max_hops": 1,
+    "window_mode": "floor",
+    "temperature_struct": 0.05,
+    "temperature_hard": 0.05
+}
+```
+
+`pocket_encoder` selects the protein-side model: `"pocket"` builds one node population from
+protein atoms within 6 A of any ligand atom, while the default `"voxel"` builds the older
+two-population graph. `mol_max_hops` limits ligand edges to that many covalent bonds (default
+3). `window_mode` `"floor"` excludes negatives ranked above a per-anchor floor set by that
+anchor's own positive rank, easing the hard-negative curriculum as training improves.
+
+Training writes an `arch.json` beside the checkpoints recording these choices, so the weights
+can be loaded back with the architecture they were trained with. The run banner at the top of
+the log states what was actually built — check it matches what you intended.
 ### Command Usage
 
 ```bash

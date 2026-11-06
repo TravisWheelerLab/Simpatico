@@ -1,1 +1,1 @@
-recursive-include simpatico *.json *.pt
+recursive-include simpatico *.json *.pt *.w

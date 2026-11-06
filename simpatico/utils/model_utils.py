@@ -102,12 +102,23 @@ class ResLayer(torch.nn.Module):
         heads: int = 4,
         edge_dim: Optional[int] = None,
         norm: Optional[torch.nn.Module] = torch.nn.LayerNorm, # CHANGED: Default to LayerNorm
+        add_self_loops: bool = True,
     ):
         super().__init__()
         self.act = act()
         input_dim = dims * heads
 
-        self.layer = GATv2Conv(input_dim, dims, heads=heads, edge_dim=edge_dim)
+        # add_self_loops: GATv2Conv calls remove_self_loops() BEFORE add_self_loops(), so there
+        # is exactly one self-loop per node either way -- it does NOT stack on top of the
+        # self-pairs that PositionalEdgeGenerator's radius(x, x, ...) produces on the protein
+        # graph (658 atom-atom, 116 vox-vox in a typical pocket). The only difference is the
+        # self-loop's edge feature: fill_value='mean' when True, versus the explicit MLP(0)
+        # ~= 0.57 when False. Measured on ts005_th005, that changes nothing -- perturbation
+        # response 0.01807 vs 0.01809, identity R^2 0.1180 both ways. Default stays True; the
+        # flag exists only to A/B it. Ligand graphs carry no explicit self-loops at all, so
+        # setting it False there would remove self-attention rather than deduplicate it.
+        self.layer = GATv2Conv(input_dim, dims, heads=heads, edge_dim=edge_dim,
+                               add_self_loops=add_self_loops)
         self.dropout = torch.nn.Dropout(dr)
 
         # Norm is applied to the input dimension
@@ -204,14 +215,16 @@ class ResBlock(torch.nn.Module):
     """
 
     def __init__(
-        self, dims: int, heads: int, depth: int, edge_dim: Optional[int] = None
+        self, dims: int, heads: int, depth: int, edge_dim: Optional[int] = None,
+        add_self_loops: bool = True
     ):
         super().__init__()
         self.res_block = PyG_Sequential(
             "x, edge_index, edge_attr",
             [
                 (
-                    ResLayer(dims, heads=heads, edge_dim=edge_dim),
+                    ResLayer(dims, heads=heads, edge_dim=edge_dim,
+                             add_self_loops=add_self_loops),
                     "x, edge_index, edge_attr -> x",
                 )
                 for _ in range(depth)

@@ -1,4 +1,3 @@
-
 {
     "res_vocab": [
         "ALA",
@@ -94,8 +93,21 @@
         "V",
         "Zn"
     ],
-    "H_count_vocab": [0,1,2,3],
-    "protein_filetypes": [".pdb"],
-    "molecule_filetypes": [".pdb", ".sdf", ".mol2", ".ism", ".ism"],
-    "default_weights": "lpcba_e135.w"
+    "H_count_vocab": [
+        0,
+        1,
+        2,
+        3
+    ],
+    "protein_filetypes": [
+        ".pdb"
+    ],
+    "molecule_filetypes": [
+        ".pdb",
+        ".sdf",
+        ".mol2",
+        ".ism",
+        ".ism"
+    ],
+    "default_weights": "litpcba_s90_s42_e30.w"
 }

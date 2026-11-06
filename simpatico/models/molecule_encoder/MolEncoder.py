@@ -18,9 +18,26 @@ class MolEncoder(torch.nn.Module):
         blocks: int = 6,
         block_depth: int = 2,
         edge_dim: Optional[int] = MolEncoderDefaults["edge_dim"],
+        max_hops: int = 3,
         **kwargs
     ):
         super().__init__()
+
+        # Keep only edges up to `max_hops` covalent bonds. get_mol_edges bakes 1-, 2- and 3-hop
+        # edges into every cached graph with a one-hot hop feature, so the restriction is a mask
+        # on edge_attr rather than a rebuild of the corpus -- and edge_dim stays 3, so weights
+        # remain compatible across settings.
+        #
+        # 12 GATv2 layers over 3-hop edges is a NOMINAL receptive field of 36 bonds, far wider
+        # than any drug-like molecule, so in principle every atom sees the whole graph and can
+        # encode which molecule it belongs to. Measured, the effective field is ~6-8 bonds, but
+        # at max_hops=1 the nominal field drops to 12 bonds and the effective one well below
+        # that, which is the point: an atom rep should describe a local chemical environment,
+        # not identify its parent molecule.
+        #
+        # NOT in the state_dict -- see the note on ProteinEncoder.surface_only. Construct via
+        # load_encoders(), which reads arch.json.
+        self.max_hops = max_hops
 
         # Dimensions per head
         self.hidden_dim = hidden_dim
@@ -61,6 +78,12 @@ class MolEncoder(torch.nn.Module):
             data.edge_index.long(),
             data.edge_attr.float(),
         )
+
+        if self.max_hops is not None and self.max_hops < edge_attr.size(1):
+            # edge_attr is a one-hot of hop distance, and get_k_hop_edges never emits the same
+            # atom pair at two hop counts, so a row is exactly one hop class.
+            keep = edge_attr[:, : self.max_hops].sum(1) > 0.5
+            edge_index, edge_attr = edge_index[:, keep], edge_attr[keep]
 
         # Initial projection
         # rblock_outs[0] shape: [N, hidden_dim * heads]
